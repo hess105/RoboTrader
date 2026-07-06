@@ -11,7 +11,8 @@ YEAR    ?= $(shell date +%Y)
 GUI_DIR := gui/web
 
 .DEFAULT_GOAL := help
-.PHONY: help install keys-paper keys-live test backtest paper live gui gui-build kill tax clean
+.PHONY: help install keys-paper keys-live test backtest paper live gui gui-build kill tax clean \
+        docker-build docker-up docker-down docker-logs docker-live docker-kill
 
 help: ## Show this help
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[1m%-12s\033[0m %s\n", $$1, $$2}'
@@ -62,3 +63,23 @@ tax: install ## Export realized gains/losses CSV, e.g. `make tax YEAR=2026`
 clean: ## Remove venv and caches (never touches journal/ or logs/)
 	rm -rf $(VENV) .pytest_cache
 	find . -type d -name __pycache__ -not -path './.git/*' -exec rm -rf {} +
+
+## --- Docker deployment (see docs/DEPLOY.md) ---
+
+docker-build: ## Build the Docker image (engine + built GUI in one image)
+	docker compose build
+
+docker-up: docker-build ## Start the engine in PAPER mode, detached, restart-on-failure
+	docker compose up -d
+
+docker-down: ## Stop the containerized engine
+	docker compose down
+
+docker-logs: ## Tail the containerized engine's logs
+	docker compose logs -f
+
+docker-live: docker-build ## Start the engine in LIVE mode, attached (must type the confirmation phrase)
+	docker compose run --rm engine python -m service.engine --config config/live.yaml
+
+docker-kill: ## KILL SWITCH against the running container: cancel orders, flatten positions, halt
+	docker compose exec engine python -m scripts.kill --reason "manual via make docker-kill"

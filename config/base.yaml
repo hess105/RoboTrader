@@ -93,7 +93,12 @@ backtest:
   drawdown_reset_sessions: 10       # simulated post-mortem cooldown (backtest only)
 
 service:
-  host: 127.0.0.1                   # never expose directly; Tailscale for remote
+  # 0.0.0.0 so the Docker port-publish (host-side "127.0.0.1:8765:8765") can
+  # reach the process at all — Docker's bridge network can't forward a
+  # published port to a process bound to the container's own loopback.
+  # The security boundary lives on the host instead: ufw + publishing the
+  # port only on the host's 127.0.0.1, with Tailscale for remote access.
+  host: 0.0.0.0
   port: 8765
 
 monitoring:

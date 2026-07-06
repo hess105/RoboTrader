@@ -1,110 +1,122 @@
-# Running RoboTrader 24/7 on a KVM VPS
+# Running RoboTrader 24/7 in Docker on a DigitalOcean droplet
 
-Any KVM (or fully-virtualized) VPS works: 1 vCPU, 1 GB RAM, 10 GB disk is
-plenty — the engine computes signals once a day and ticks once a minute.
-Hetzner CX22 (~€4/mo), Vultr/DigitalOcean/Linode ($6/mo) are all fine.
-Region barely matters for daily bars; US East is a reasonable default.
-OS assumed below: Ubuntu 24.04.
-
-## 1. Base box
-
-```bash
-adduser robotrader
-apt update && apt install -y python3.12-venv git make ufw tmux
-ufw default deny incoming && ufw allow OpenSSH && ufw enable
-# SSH keys only:
-sed -i 's/#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-systemctl reload ssh
-```
+Deployment is Docker-only. Any small Ubuntu droplet works: 1 vCPU / 1 GB RAM
+/ 25 GB disk (DigitalOcean's cheapest droplet) is plenty — the engine
+computes signals once a day and ticks once a minute. OS assumed below:
+Ubuntu 24.04 LTS. Region barely matters for daily bars; NYC is a reasonable
+default. Everything here also works on Hetzner/Vultr/Linode — it's a
+generic Ubuntu + Docker setup, DigitalOcean is just the example.
 
 Server timezone doesn't matter — the scheduler pins America/New_York
-internally (service/engine.py).
+internally (`service/engine.py`).
 
-## 2. Install
+## 1. Create the droplet
 
-```bash
-sudo -iu robotrader
-git clone <your-repo-url> /opt/robotrader && cd /opt/robotrader
-make install
-```
+Ubuntu 24.04 LTS, the cheapest plan, SSH-key auth (skip the password root
+login DigitalOcean offers). Note the droplet's IP.
 
-## 3. Credentials — env file, not keychain
+## 2. One-command install
 
-macOS Keychain doesn't exist here, and headless Linux has no Secret Service
-for `keyring`, so use the env-var fallback that `core/settings.py` already
-supports. As root:
+SSH in as root, then:
 
 ```bash
-cat > /etc/robotrader.env << 'EOF'
-ALPACA_PAPER_KEY_ID=...
-ALPACA_PAPER_SECRET_KEY=...
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-ALERT_EMAIL_TO=you@example.com
-SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_FROM=robotrader@example.com
-SMTP_USER=robotrader@example.com
-SMTP_PASSWORD=...
-HEALTHCHECKS_URL=https://hc-ping.com/<your-uuid>
-EOF
-chmod 600 /etc/robotrader.env && chown robotrader /etc/robotrader.env
+curl -fsSL https://raw.githubusercontent.com/hess105/RoboTrader/main/deploy/docker-install.sh -o docker-install.sh
+bash docker-install.sh
 ```
 
-Do NOT add live keys until Gate 2 passes.
+This script (`deploy/docker-install.sh`):
 
-## 4. GUI
+- installs Docker Engine + the Compose plugin from Docker's official apt repo
+- creates a dedicated `robotrader` system user (in the `docker` group, not `sudo`)
+- enables `ufw` (SSH only) and `fail2ban`
+- clones the repo to `/opt/robotrader`
+- creates empty, `chmod 600` placeholder files under `/opt/robotrader/secrets/`
+  for every credential (Docker Compose secrets need the file to exist even
+  if you don't use that channel — e.g. you can leave the live-key and SMTP
+  files empty if you only use Telegram alerts and paper trading)
+- builds the Docker image (multi-stage: Node builds the React dashboard,
+  then it's copied into the Python runtime image — no Node install needed
+  on the droplet itself)
 
-The engine serves the built dashboard at :8765. Either install node on the
-server (`apt install -y nodejs npm`, then `make gui-build`), or build on
-your laptop and copy it:
+If you'd rather read it before running it, it's a plain bash script — see
+[deploy/docker-install.sh](../deploy/docker-install.sh).
+
+## 3. Credentials — Docker secrets, not the OS keychain
+
+Headless Linux has no Secret Service for `keyring`, so `core/settings.py`
+falls back to reading credentials from environment variables, or — new for
+Docker — from files Compose mounts read-only at `/run/secrets/<name>`
+(see `core/secrets.py`). The installer already created the files; fill in
+the ones you need:
 
 ```bash
-make gui-build && rsync -a gui/web/dist/ robotrader@server:/opt/robotrader/gui/web/dist/
+sudo -u robotrader nano /opt/robotrader/secrets/alpaca_paper_key_id.txt
+sudo -u robotrader nano /opt/robotrader/secrets/alpaca_paper_secret_key.txt
+
+# Optional (leave the file empty to disable that alert channel):
+sudo -u robotrader nano /opt/robotrader/secrets/telegram_bot_token.txt
+sudo -u robotrader nano /opt/robotrader/secrets/telegram_chat_id.txt
+sudo -u robotrader nano /opt/robotrader/secrets/healthchecks_url.txt
 ```
 
-## 5. Remote access — Tailscale, never an open port
+Each file holds exactly one value, no quotes, no trailing newline needed
+(it's stripped). Do NOT put live keys in until Gate 2 passes.
 
-The API/GUI binds 127.0.0.1 and has no authentication; exposing :8765
-publicly would hand your kill switch to the internet. Install Tailscale on
-the server and your phone/laptop:
+## 4. Remote access — Tailscale, never an open port
+
+`docker-compose.yml` only publishes the API/GUI on the **droplet's own**
+`127.0.0.1:8765` (`ports: ["127.0.0.1:8765:8765"]`) — it is never reachable
+from the public internet, ufw or not. Install Tailscale on the droplet and
+your phone/laptop (the installer offers to do this for you):
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh && tailscale up
 ```
 
-Then either browse to `http://<tailscale-ip>:8765` after setting
-`service.host: 0.0.0.0` in config (safe ONLY because ufw blocks everything
-and Tailscale traffic arrives on its own interface — keep the firewall on),
-or leave host as 127.0.0.1 and use an SSH tunnel:
-`ssh -L 8765:127.0.0.1:8765 robotrader@server`.
+Then either browse to `http://<tailscale-ip>:8765` (safe because Tailscale
+traffic arrives on its own interface, and the port is bound to loopback for
+everything else), or SSH-tunnel instead:
+`ssh -L 8765:127.0.0.1:8765 robotrader@<droplet-ip>`.
 
-## 6. Run as a service (paper)
-
-```bash
-sudo cp deploy/robotrader.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now robotrader
-systemctl status robotrader
-```
-
-`Restart=on-failure` + the healthchecks.io dead-man ping (the engine pings
-`HEALTHCHECKS_URL` every healthy tick; healthchecks alerts you if pings
-stop) covers the two ways a remote box fails silently.
-
-## 7. Live mode (later, after Gate 2)
-
-Live requires typing the confirmation phrase interactively, so it does NOT
-run under systemd — that's intentional; a service manager cannot consent to
-real money. Run it in tmux:
+## 5. Run as a service (paper)
 
 ```bash
-tmux new -s robotrader
-cd /opt/robotrader && make live      # type the phrase; detach with Ctrl-B D
+su - robotrader
+cd /opt/robotrader
+docker compose up -d       # or: make docker-up
+docker compose logs -f     # or: make docker-logs
 ```
 
-## 8. Backups + drills
+`restart: unless-stopped` in `docker-compose.yml` covers both crash recovery
+and droplet reboots (Docker itself is enabled via systemd by the installer),
+the same job the old systemd unit used to do. The healthchecks.io dead-man
+ping (the engine pings the URL in `secrets/healthchecks_url.txt` every
+healthy tick; healthchecks alerts you if pings stop) covers the other way a
+remote box fails silently.
 
-The journal is the system of record (orders, fills, tax lots, halts):
+## 6. Live mode (later, after Gate 2)
+
+Live requires typing the confirmation phrase on an interactive terminal
+(`core/settings.py: _confirm_live`), so it deliberately does NOT run as the
+long-lived `engine` service — a container restart policy cannot consent to
+real money. Run it attached, the Docker equivalent of the old tmux session:
+
+```bash
+cd /opt/robotrader
+docker compose run --rm engine python -m service.engine --config config/live.yaml
+# or: make docker-live
+```
+
+`run` reuses the same image, volumes and secrets as the `engine` service but
+keeps your terminal attached, so the typed-phrase gate still works exactly
+as before. Detach with Ctrl-C only after confirming you want it stopped —
+there's no `-d` here on purpose.
+
+## 7. Backups + drills
+
+The journal is the system of record (orders, fills, tax lots, halts) and
+lives on the host at `/opt/robotrader/journal` (bind-mounted, not a Docker
+volume, specifically so host-side cron/backup tooling can see it directly):
 
 ```bash
 # as robotrader: crontab -e
@@ -112,4 +124,30 @@ The journal is the system of record (orders, fills, tax lots, halts):
 ```
 
 Monthly, from anywhere with SSH access, drill the GUI-independent kill path:
-`ssh robotrader@server 'cd /opt/robotrader && make kill'`.
+
+```bash
+ssh robotrader@<droplet-ip> 'cd /opt/robotrader && docker compose exec engine python -m scripts.kill --reason "monthly drill"'
+# or: ssh robotrader@<droplet-ip> 'cd /opt/robotrader && make docker-kill'
+```
+
+## 8. Updating
+
+```bash
+su - robotrader
+cd /opt/robotrader
+git pull
+docker compose build
+docker compose up -d
+```
+
+Config changes in `config/*.yaml` take effect on the next restart — they're
+bind-mounted read-only, not baked into the image, so `git pull` alone is
+enough for a config-only change (`docker compose restart engine`).
+
+## Local development (macOS or otherwise, no Docker)
+
+Docker is for deployment; day-to-day development still uses the venv/`make`
+workflow (`make install`, `make test`, `make backtest`, `make paper`, `make
+gui`) — see the [README](../README.md). The OS keychain path
+(`make keys-paper`) only applies there; on the droplet, credentials always
+come from the `secrets/` files above.

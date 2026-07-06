@@ -8,7 +8,8 @@ ETFs + mega-caps, Alpaca brokerage, cash account, conservative risk
 
 ## How to run
 
-Everything runs through `make` (see the [Makefile](Makefile)):
+Local development (this repo, your laptop) runs through `make` (see the
+[Makefile](Makefile)):
 
 ```
 make install      # create .venv and install dependencies
@@ -20,6 +21,16 @@ make gui          # start the web dashboard (client of the engine API)
 make kill         # kill switch: flatten all positions, halt the engine
 make live         # start the engine in LIVE mode — guarded, see Rules below
 make tax YEAR=YYYY  # export realized gains/losses CSV (Form 8949 layout)
+```
+
+**Deployment (24/7, e.g. a DigitalOcean droplet) is Docker-only** — see
+[docs/DEPLOY.md](docs/DEPLOY.md). Short version, once Docker is installed:
+
+```
+make docker-up     # build + start the engine in PAPER mode, detached
+make docker-logs    # tail engine logs
+make docker-live    # start LIVE mode, attached (types the confirmation phrase)
+make docker-kill    # kill switch against the running container
 ```
 
 > **Current status:** all layers are implemented and tested — data, strategy,

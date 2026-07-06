@@ -63,10 +63,10 @@ def broker_creds(mode: Mode) -> BrokerCreds:
 
     Secrets are never logged.
     """
-    import os
-
     import keyring
     from keyring.errors import NoKeyringError
+
+    from core.secrets import read_secret
 
     prefix = "LIVE" if mode is Mode.LIVE else "PAPER"
 
@@ -76,10 +76,10 @@ def broker_creds(mode: Mode) -> BrokerCreds:
             if value:
                 return value
         except NoKeyringError:
-            # No usable keyring backend (common on headless Linux)
+            # No usable keyring backend (common on headless Linux / containers)
             pass
 
-        return os.environ.get(f"ALPACA_{name}", "")
+        return read_secret(f"ALPACA_{name}")
 
     key_id = get_secret(f"{prefix}_KEY_ID")
     secret = get_secret(f"{prefix}_SECRET_KEY")

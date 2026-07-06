@@ -1,0 +1,72 @@
+# PAPER mode is the default: `docker compose up -d` builds and runs the
+# engine headless, restarting on crash/reboot like the old systemd unit did.
+#
+# LIVE mode deliberately does NOT run as this long-lived service — it needs
+# an interactive terminal to accept the typed confirmation phrase
+# (core/settings.py), same as the old "run it in tmux" rule. Start it with:
+#   docker compose run --rm engine python -m service.engine --config config/live.yaml
+# `run` reuses this service's volumes/secrets but attaches your terminal, so
+# the prompt still works and nothing about the safety gate changes.
+
+services:
+  engine:
+    build: .
+    image: robotrader:latest
+    container_name: robotrader
+    restart: unless-stopped
+    command: ["python", "-m", "service.engine", "--config", "config/paper.yaml"]
+    environment:
+      - TZ=UTC   # cosmetic only; the scheduler pins America/New_York itself
+    secrets:
+      - alpaca_paper_key_id
+      - alpaca_paper_secret_key
+      - alpaca_live_key_id
+      - alpaca_live_secret_key
+      - telegram_bot_token
+      - telegram_chat_id
+      - alert_email_to
+      - smtp_host
+      - smtp_port
+      - smtp_from
+      - smtp_user
+      - smtp_password
+      - healthchecks_url
+    volumes:
+      - ./journal:/app/journal
+      - ./logs:/app/logs
+      - ./data/cache:/app/data/cache
+      - ./exports:/app/exports
+      - ./config:/app/config:ro
+    ports:
+      # Bind to the host's loopback only — never publish 0.0.0.0:8765.
+      # Remote access is Tailscale (on the host) or an SSH tunnel, per
+      # docs/DEPLOY.md, exactly like the pre-Docker setup.
+      - "127.0.0.1:8765:8765"
+
+secrets:
+  alpaca_paper_key_id:
+    file: ./secrets/alpaca_paper_key_id.txt
+  alpaca_paper_secret_key:
+    file: ./secrets/alpaca_paper_secret_key.txt
+  alpaca_live_key_id:
+    file: ./secrets/alpaca_live_key_id.txt
+  alpaca_live_secret_key:
+    file: ./secrets/alpaca_live_secret_key.txt
+  telegram_bot_token:
+    file: ./secrets/telegram_bot_token.txt
+  telegram_chat_id:
+    file: ./secrets/telegram_chat_id.txt
+  alert_email_to:
+    file: ./secrets/alert_email_to.txt
+  smtp_host:
+    file: ./secrets/smtp_host.txt
+  smtp_port:
+    file: ./secrets/smtp_port.txt
+  smtp_from:
+    file: ./secrets/smtp_from.txt
+  smtp_user:
+    file: ./secrets/smtp_user.txt
+  smtp_password:
+    file: ./secrets/smtp_password.txt
+  healthchecks_url:
+    file: ./secrets/healthchecks_url.txt

@@ -9,23 +9,24 @@ mismatch, kill switch). Email is CRIT-only to avoid inbox noise.
 """
 from __future__ import annotations
 
-import os
 import smtplib
 from email.message import EmailMessage
 
 import requests
 
+from core.secrets import read_secret
+
 
 class Alerter:
     def __init__(self, cfg: dict | None = None):
-        self.tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        self.tg_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
-        self.email_to = os.environ.get("ALERT_EMAIL_TO", "")
-        self.smtp_host = os.environ.get("SMTP_HOST", "")
-        self.smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-        self.smtp_from = os.environ.get("SMTP_FROM", "")
-        self.smtp_user = os.environ.get("SMTP_USER", "")
-        self.smtp_password = os.environ.get("SMTP_PASSWORD", "")
+        self.tg_token = read_secret("TELEGRAM_BOT_TOKEN")
+        self.tg_chat = read_secret("TELEGRAM_CHAT_ID")
+        self.email_to = read_secret("ALERT_EMAIL_TO")
+        self.smtp_host = read_secret("SMTP_HOST")
+        self.smtp_port = int(read_secret("SMTP_PORT") or "587")
+        self.smtp_from = read_secret("SMTP_FROM")
+        self.smtp_user = read_secret("SMTP_USER")
+        self.smtp_password = read_secret("SMTP_PASSWORD")
 
     def send(self, severity: str, kind: str, message: str) -> None:
         line = f"[{severity}] robotrader/{kind}: {message}"
@@ -41,7 +42,7 @@ class Alerter:
         The engine calls this on every healthy tick; the monitoring service
         alerts when pings STOP — covering the one failure the process cannot
         report on itself. Best-effort, never raises."""
-        url = os.environ.get("HEALTHCHECKS_URL", "")
+        url = read_secret("HEALTHCHECKS_URL")
         if not url:
             return
         try:
