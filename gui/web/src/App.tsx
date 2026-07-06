@@ -54,6 +54,7 @@ const TABS = [
   ['Dashboard', 'overview'],
   ['Blotter', 'orders & fills'],
   ['Risk', 'limits & halts'],
+  ['Config', 'model & risk parameters'],
   ['Results', 'backtest reports'],
   ['Logs', 'audit trail'],
   ['Settings', 'keys & alerts'],
@@ -103,6 +104,7 @@ export default function App() {
         {tab === 'Dashboard' && <Dashboard status={status} confirmAction={confirmAction} />}
         {tab === 'Blotter' && <Blotter />}
         {tab === 'Risk' && <RiskPanel confirmAction={confirmAction} />}
+        {tab === 'Config' && <Config />}
         {tab === 'Results' && <Results />}
         {tab === 'Logs' && <Logs />}
         {tab === 'Settings' && <Settings mode={mode} confirmAction={confirmAction} />}
@@ -192,6 +194,63 @@ function LineChart({ data, height = 210 }: { data: number[]; height?: number }) 
     g.fillText(data[data.length - 1].toFixed(2), c.width - 70, 16)
   }, [data])
   return <canvas ref={ref} className="chart" width={1100} height={height} />
+}
+
+function DrawdownChart({ data, height = 140 }: { data: number[]; height?: number }) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const c = ref.current
+    if (!c || data.length < 2) return
+    const g = c.getContext('2d')!
+    const css = getComputedStyle(document.body)
+    const bad = css.getPropertyValue('--bad').trim() || '#ef4444'
+    const grid = css.getPropertyValue('--border').trim() || '#2a3345'
+    g.clearRect(0, 0, c.width, c.height)
+    g.strokeStyle = grid
+    g.lineWidth = 1
+    for (let i = 1; i < 4; i++) {
+      g.beginPath()
+      g.moveTo(0, (c.height / 4) * i)
+      g.lineTo(c.width, (c.height / 4) * i)
+      g.stroke()
+    }
+    let peak = data[0]
+    const dd = data.map((e) => {
+      peak = Math.max(peak, e)
+      return peak > 0 ? -100 * (peak - e) / peak : 0
+    })
+    const min = Math.min(...dd, 0)
+    const span = -min || 1
+    const px = (i: number) => (i / (dd.length - 1)) * c.width
+    const py = (y: number) => 12 + (-y / span) * (c.height - 24)
+    g.beginPath()
+    g.moveTo(0, py(0))
+    dd.forEach((y, i) => g.lineTo(px(i), py(y)))
+    g.lineTo(c.width, py(0))
+    g.closePath()
+    g.fillStyle = 'rgba(239, 68, 68, 0.15)'
+    g.fill()
+    g.strokeStyle = bad
+    g.lineWidth = 1.6
+    g.beginPath()
+    dd.forEach((y, i) => (i === 0 ? g.moveTo(px(i), py(y)) : g.lineTo(px(i), py(y))))
+    g.stroke()
+    g.fillStyle = bad
+    g.font = '11px sans-serif'
+    g.fillText(min.toFixed(1) + '% max', c.width - 90, 16)
+  }, [data])
+  return <canvas ref={ref} className="chart" width={1100} height={height} />
+}
+
+function Stat({ label, value, tone }: { label: string; value: unknown; tone?: 'pos' | 'neg' }) {
+  return (
+    <div className="stat">
+      <div className="label">{label}</div>
+      <div className={'value' + (tone ? ' ' + tone : '')}>
+        {value == null || value === '' ? '—' : String(value)}
+      </div>
+    </div>
+  )
 }
 
 /* -------------------------------------------------- Dashboard ---- */
@@ -288,7 +347,11 @@ function Dashboard({ status, confirmAction }: {
             post('/strategy/resume', { note: 'resumed via GUI' }).catch((e) => alert(e.message))
           }}>Resume</button>
         </div>
-        <div className="muted">{JSON.stringify(status?.strategy.params ?? {})}</div>
+        <div className="muted">
+          {Object.keys(status?.strategy.params ?? {}).length
+            ? `Composite of ${Object.keys(status!.strategy.params).join(' + ')} — full parameters in the Config tab.`
+            : 'No active sleeves.'}
+        </div>
       </div>
     </>
   )
@@ -315,6 +378,110 @@ function Gate2Card({ g }: { g: any }) {
       <div className="check"><span>Last drill</span>
         <b>{g.last_drill ? g.last_drill.slice(0, 10) : 'never'}</b></div>
     </div>
+  )
+}
+
+/* ------------------------------------------------------ Config ---- */
+
+function Item({ label, value }: { label: string; value: unknown }) {
+  const shown = value == null || value === '' ? '—' : String(value)
+  return (
+    <div className="item">
+      <span>{label.replace(/_/g, ' ')}</span>
+      <b>{shown}</b>
+    </div>
+  )
+}
+
+function Config() {
+  const cfg = usePoll(useCallback(() => j<any>('/config'), []), 60000)
+  if (!cfg) return <div className="card muted">Loading configuration…</div>
+
+  const strategies: [string, Record<string, unknown>][] =
+    (cfg.strategies ?? []).map((s: any) => [s.name, s.params])
+  const buckets: Record<string, string[]> = cfg.universe?.buckets ?? {}
+
+  return (
+    <>
+      <div className="card">
+        <h3>Account & Universe<small>config/base.yaml</small></h3>
+        <div className="kv">
+          <Item label="Starting capital" value={fmt$(cfg.account?.starting_capital)} />
+          <Item label="Account type" value={cfg.account?.account_type} />
+          <Item label="Min avg $ volume" value={fmt$(cfg.universe?.min_avg_dollar_volume)} />
+          <Item label="Max spread" value={cfg.universe?.max_spread_pct + '% of mid'} />
+        </div>
+        {Object.entries(buckets).map(([bucket, syms]) => (
+          <div key={bucket} style={{ marginTop: 12 }}>
+            <div className="muted">{bucket.replace(/_/g, ' ')}</div>
+            <div className="chips">
+              {syms.map((s) => <span key={s} className="chip">{s}</span>)}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <h3>Strategy Configuration<small>strategies/composite.py sleeves</small></h3>
+        {strategies.map(([name, params]) => (
+          <div key={name} className="subcard">
+            <h4>{name}</h4>
+            <div className="kv">
+              {Object.entries(params).map(([k, v]) => (
+                <Item key={k} label={k} value={Array.isArray(v) ? v.join(', ') : v} />
+              ))}
+            </div>
+          </div>
+        ))}
+        {strategies.length === 0 && <div className="muted">No strategies configured.</div>}
+      </div>
+
+      <div className="cols">
+        <div className="card">
+          <h3>Risk Limits<small>risk/manager.py</small></h3>
+          <div className="kv">
+            {Object.entries(cfg.risk ?? {})
+              .filter(([, v]) => !(v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0))
+              .map(([k, v]) => <Item key={k} label={k} value={v} />)}
+          </div>
+        </div>
+        <div>
+          <div className="card">
+            <h3>Execution<small>order handling & schedule</small></h3>
+            <div className="kv">
+              <Item label="Entry order" value={cfg.execution?.order_type_entry} />
+              <Item label="Entry limit offset" value={cfg.execution?.entry_limit_offset_bps + ' bps'} />
+              <Item label="Exit order" value={cfg.execution?.order_type_exit} />
+              <Item label="Entry timeout" value={cfg.execution?.order_timeout_sec + 's'} />
+              <Item label="Signal time (ET)" value={cfg.execution?.schedule?.signal_time} />
+              <Item label="Reconcile time (ET)" value={cfg.execution?.schedule?.reconcile_time} />
+            </div>
+          </div>
+          <div className="card">
+            <h3>Monitoring & Alerts</h3>
+            <div className="kv">
+              <Item label="Disconnect alert" value={cfg.monitoring?.disconnect_alert_min + ' min'} />
+              <Item label="Kill on disconnect" value={cfg.monitoring?.kill_after_disconnect_min + ' min'} />
+            </div>
+            <div className="chips" style={{ marginTop: 10 }}>
+              {(cfg.alerts?.channels ?? []).map((c: string) => <span key={c} className="chip">{c}</span>)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Backtest Assumptions<small>backtest/costs.py — validation, not live execution</small></h3>
+        <div className="kv">
+          <Item label="History start" value={cfg.backtest?.start} />
+          <Item label="Commission/share" value={fmt$(cfg.backtest?.commission_per_share)} />
+          <Item label="SEC fee / $1M sold" value={fmt$(cfg.backtest?.sec_fee_per_million)} />
+          <Item label="FINRA TAF / share" value={fmt$(cfg.backtest?.taf_per_share)} />
+          <Item label="Slippage model" value={cfg.backtest?.slippage_model} />
+          <Item label="Extra slippage" value={cfg.backtest?.extra_slippage_bps + ' bps'} />
+        </div>
+      </div>
+    </>
   )
 }
 
@@ -396,9 +563,45 @@ function RiskPanel({ confirmAction }: { confirmAction: (t: string) => boolean })
 
 /* ----------------------------------------------------- Results ---- */
 
+type SortKey = 'entry_ts' | 'pnl' | 'bars_held'
+
 function Results() {
   const runs = usePoll(useCallback(() => j<any[]>('/backtests'), []), 10000)
   const [detail, setDetail] = useState<any | null>(null)
+  const [symbolFilter, setSymbolFilter] = useState('')
+  const [reasonFilter, setReasonFilter] = useState('')
+  const [sortKey, setSortKey] = useState<SortKey>('entry_ts')
+  const [sortDir, setSortDir] = useState<1 | -1>(-1)   // -1 = newest/largest first
+
+  const openRun = (id: string) => {
+    setSymbolFilter('')
+    setReasonFilter('')
+    setSortKey('entry_ts')
+    setSortDir(-1)
+    j('/backtests/' + id).then(setDetail).catch((e) => alert(e.message))
+  }
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === 1 ? -1 : 1))
+    else { setSortKey(key); setSortDir(-1) }
+  }
+  const sortArrow = (key: SortKey) => sortKey === key ? (sortDir === 1 ? '↑' : '↓') : null
+
+  const trades: any[] = detail?.trades ?? []
+  const symbols = Array.from(new Set(trades.map((t) => t.symbol))).sort()
+  const reasons = Array.from(new Set(trades.map((t) => t.exit_reason))).sort()
+
+  const filtered = trades
+    .filter((t) => (!symbolFilter || t.symbol === symbolFilter)
+                && (!reasonFilter || t.exit_reason === reasonFilter))
+    .sort((a, b) => {
+      const av = sortKey === 'entry_ts' ? a.entry_ts : +a[sortKey]
+      const bv = sortKey === 'entry_ts' ? b.entry_ts : +b[sortKey]
+      return (av < bv ? -1 : av > bv ? 1 : 0) * sortDir
+    })
+  const wins = filtered.filter((t) => +t.pnl > 0).length
+  const winRate = filtered.length ? (100 * wins / filtered.length).toFixed(1) + '%' : '—'
+  const shown = filtered.slice(0, 100)
+
   return (
     <>
       <div className="card">
@@ -410,8 +613,7 @@ function Results() {
           </thead>
           <tbody>
             {(runs ?? []).map((r) => (
-              <tr key={r.run_id} className="clickable"
-                  onClick={() => j('/backtests/' + r.run_id).then(setDetail).catch((e) => alert(e.message))}>
+              <tr key={r.run_id} className="clickable" onClick={() => openRun(r.run_id)}>
                 <td>{r.run_id}</td>
                 <td>{r.trades}</td>
                 <td>{r.sharpe ?? ''}</td>
@@ -427,29 +629,93 @@ function Results() {
           </tbody>
         </table>
       </div>
+
       {detail && (
-        <div className="card">
-          <h3>{detail.run_id}</h3>
-          <div className="muted" style={{ marginBottom: 8 }}>{JSON.stringify(detail.metrics)}</div>
-          <LineChart data={detail.equity.map((e: [string, number]) => e[1])} />
-          <table>
-            <thead>
-              <tr><th>Symbol</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Bars</th><th>Exit Reason</th></tr>
-            </thead>
-            <tbody>
-              {(detail.trades ?? []).slice(-60).reverse().map((t: any, i: number) => (
-                <tr key={i}>
-                  <td><b>{t.symbol}</b></td>
-                  <td>{(t.entry_ts || '').slice(0, 10)}</td>
-                  <td>{(t.exit_ts || '').slice(0, 10)}</td>
-                  <td className={+t.pnl > 0 ? 'pos' : 'neg'}>{(+t.pnl).toFixed(2)}</td>
-                  <td>{t.bars_held}</td>
-                  <td>{t.exit_reason}</td>
+        <>
+          <div className="card">
+            <h3>{detail.run_id}<small>gate-qualifying run metrics</small></h3>
+            <div className="stats">
+              <Stat label="Trades" value={detail.metrics.trades} />
+              <Stat label="Sharpe" value={detail.metrics.sharpe} />
+              <Stat label="Profit factor" value={detail.metrics.profit_factor} />
+              <Stat label="Max drawdown" value={detail.metrics.max_drawdown_pct + '%'} tone="neg" />
+              <Stat label="Total return" value={detail.metrics.total_return_pct + '%'}
+                    tone={detail.metrics.total_return_pct >= 0 ? 'pos' : 'neg'} />
+              <Stat label="CAGR" value={detail.metrics.cagr_pct + '%'} />
+              <Stat label="Win rate" value={detail.metrics.win_rate_pct + '%'} />
+              <Stat label="Expectancy" value={detail.metrics.expectancy} />
+              <Stat label="Avg win" value={detail.metrics.avg_win} tone="pos" />
+              <Stat label="Avg loss" value={detail.metrics.avg_loss} tone="neg" />
+              <Stat label="Avg bars held" value={detail.metrics.avg_bars_held} />
+              <Stat label="Exposure" value={detail.metrics.exposure_pct + '%'} />
+              {detail.metrics.drawdown_halts != null &&
+                <Stat label="Breaker halts" value={detail.metrics.drawdown_halts} />}
+            </div>
+          </div>
+
+          <div className="cols">
+            <div className="card">
+              <h3>Equity Curve<small>starting equity to close</small></h3>
+              <LineChart data={detail.equity.map((e: [string, number]) => e[1])} />
+            </div>
+            <div className="card">
+              <h3>Drawdown<small>% below running peak</small></h3>
+              <DrawdownChart data={detail.equity.map((e: [string, number]) => e[1])} />
+            </div>
+          </div>
+
+          <div className="card">
+            <h3>Trade Log<small>{filtered.length} of {trades.length} trades — win rate {winRate}</small></h3>
+            <div className="row">
+              <select value={symbolFilter} onChange={(e) => setSymbolFilter(e.target.value)}>
+                <option value="">All symbols</option>
+                {symbols.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <select value={reasonFilter} onChange={(e) => setReasonFilter(e.target.value)}>
+                <option value="">All exit reasons</option>
+                {reasons.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th className="sortable" onClick={() => toggleSort('entry_ts')}>
+                    Entry<span className="arrow">{sortArrow('entry_ts')}</span>
+                  </th>
+                  <th>Exit</th>
+                  <th className="sortable" onClick={() => toggleSort('pnl')}>
+                    P&L<span className="arrow">{sortArrow('pnl')}</span>
+                  </th>
+                  <th className="sortable" onClick={() => toggleSort('bars_held')}>
+                    Bars<span className="arrow">{sortArrow('bars_held')}</span>
+                  </th>
+                  <th>Exit Reason</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {shown.map((t: any, i: number) => (
+                  <tr key={i}>
+                    <td><b>{t.symbol}</b></td>
+                    <td>{(t.entry_ts || '').slice(0, 10)}</td>
+                    <td>{(t.exit_ts || '').slice(0, 10)}</td>
+                    <td className={+t.pnl > 0 ? 'pos' : 'neg'}>{(+t.pnl).toFixed(2)}</td>
+                    <td>{t.bars_held}</td>
+                    <td>{t.exit_reason}</td>
+                  </tr>
+                ))}
+                {shown.length === 0 && (
+                  <tr><td colSpan={6} className="muted">No trades match this filter.</td></tr>
+                )}
+              </tbody>
+            </table>
+            {filtered.length > shown.length && (
+              <div className="muted" style={{ marginTop: 8 }}>
+                Showing the most recent {shown.length} of {filtered.length} filtered trades.
+              </div>
+            )}
+          </div>
+        </>
       )}
     </>
   )

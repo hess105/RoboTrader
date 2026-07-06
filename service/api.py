@@ -82,6 +82,16 @@ def create_app(engine) -> FastAPI:
     def gate2():
         return engine.gate2_status()
 
+    @app.get("/config")
+    def config():
+        # Merged base+mode yaml (account, universe, strategies, risk,
+        # execution, monitoring, alerts) — no secrets live here, but the
+        # live confirmation phrase is deliberately never surfaced to a
+        # remote client, same reasoning as "no live-mode switch in the GUI".
+        cfg = dict(engine.settings.raw)
+        cfg.pop("live_confirmation_phrase", None)
+        return cfg
+
     @app.post("/alerts/test")
     def alerts_test():
         engine.test_alerts()
