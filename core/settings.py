@@ -55,16 +55,44 @@ def _confirm_live(cfg: dict) -> None:
 
 
 def broker_creds(mode: Mode) -> BrokerCreds:
-    """Keychain first (service 'robotrader'), env fallback. Never logged."""
+    """Load Alpaca credentials.
+
+    Order of precedence:
+      1. OS keyring (macOS Keychain, Windows Credential Manager, Secret Service)
+      2. Environment variables (recommended for headless Linux/VPS)
+
+    Secrets are never logged.
+    """
+    import os
+
     import keyring
+    from keyring.errors import NoKeyringError
 
     prefix = "LIVE" if mode is Mode.LIVE else "PAPER"
-    key_id = keyring.get_password("robotrader", f"{prefix}_KEY_ID") or os.environ.get(
-        f"ALPACA_{prefix}_KEY_ID", ""
-    )
-    secret = keyring.get_password("robotrader", f"{prefix}_SECRET_KEY") or os.environ.get(
-        f"ALPACA_{prefix}_SECRET_KEY", ""
-    )
+
+    def get_secret(name: str) -> str:
+        try:
+            value = keyring.get_password("robotrader", name)
+            if value:
+                return value
+        except NoKeyringError:
+            # No usable keyring backend (common on headless Linux)
+            pass
+
+        return os.environ.get(f"ALPACA_{name}", "")
+
+    key_id = get_secret(f"{prefix}_KEY_ID")
+    secret = get_secret(f"{prefix}_SECRET_KEY")
+
     if not key_id or not secret:
-        raise RuntimeError(f"No {prefix} credentials in keychain or environment.")
-    return BrokerCreds(key_id=SecretStr(key_id), secret_key=SecretStr(secret))
+        raise RuntimeError(
+            f"Missing Alpaca {prefix.lower()} credentials.\n"
+            f"Expected environment variables:\n"
+            f"  ALPACA_{prefix}_KEY_ID\n"
+            f"  ALPACA_{prefix}_SECRET_KEY"
+        )
+
+    return BrokerCreds(
+        key_id=SecretStr(key_id),
+        secret_key=SecretStr(secret),
+    )
