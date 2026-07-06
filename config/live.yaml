@@ -1,0 +1,6 @@
+mode: live
+# Live mode additionally requires, at engine startup:
+#   1. config/live.yaml explicitly passed via --config (never the default)
+#   2. the safety phrase typed interactively (see core/settings.py)
+#   3. a clean position/cash reconciliation against the broker
+live_confirmation_phrase: "I understand this trades real money"

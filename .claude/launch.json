@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "engine",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-m", "service.engine", "--config", "config/paper.yaml"],
+      "port": 8765,
+      "autoPort": false
+    }
+  ]
+}

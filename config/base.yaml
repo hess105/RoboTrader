@@ -1,0 +1,113 @@
+# Base config — shared by paper and live. Mode-specific files override.
+# All strategy/risk numbers live HERE, never hardcoded in strategy classes.
+
+account:
+  starting_capital: 500.00        # informational; live equity read from broker
+  account_type: cash              # cash account => no PDT rule; T+1 settlement applies
+
+universe:
+  # Liquid ETFs + mega-caps only — the Gate-1-validated set. A 54-symbol
+  # expansion was tested 2026-07-06 and REJECTED by the gates: with more
+  # names the portfolio stays near-fully invested through crashes (max DD
+  # 20-23%, 2022 fold negative). More symbols diluted the edge into noisier
+  # names; do not widen this list without a fresh Gate 1 cycle.
+  buckets:
+    index_equity: [SPY, QQQ, IWM, DIA]
+    sectors:      [XLK, XLF, XLE, XLV, XLI, XLP, XLU, XLY, XLB]
+    defensive:    [TLT, IEF, GLD]
+    megacap:      [AAPL, MSFT, NVDA, GOOGL, AMZN, META, AVGO, JPM, JNJ, XOM]
+  min_avg_dollar_volume: 50000000   # $50M/day floor — belt-and-suspenders for this list
+  max_spread_pct: 0.05              # reject entry if spread > 5 bps of mid
+
+# Two complementary sleeves run as one portfolio (strategies/composite.py):
+# mean reversion earns in choppy uptrends, momentum earns in sustained trends
+# (2017 tech, 2022 energy) — the folds where the pullback sleeve goes flat.
+# All params selected in-sample 2016-2021, validated once OOS 2022-2026
+# (scripts/sweep_params.py, journal/backtests). Set 2026-07-06.
+strategies:
+  - name: trend_pullback
+    params:
+      trend_sma: 200          # only long when close > 200-day SMA
+      pullback_rsi_period: 2
+      pullback_rsi_max: 10    # entry: RSI(2) below this in an uptrend
+      exit_rsi_min: 70        # exit: RSI(2) above this...
+      max_hold_days: 5        # ...or time stop
+      atr_period: 14
+      stop_atr_mult: 2.0      # hard stop 2*ATR below entry estimate
+      entry_limit_atr: 0.25   # rest a DAY limit below the signal close;
+                              # unfilled entries lapse (buy the dip's dip)
+      min_atr_pct: 1.5        # volatility floor: skip symbols whose ATR% can't
+                              # clear round-trip costs (the XLU problem)
+      market_filter: false    # SPY>SMA200 regime gate — tested, didn't earn its
+      market_filter_symbol: SPY   # complexity (hurt 2022 bear-rally entries)
+  - name: momentum_rotation
+    params:
+      buckets: [index_equity, sectors, defensive, megacap]
+      top_n: 1                # hold the single strongest name/ETF
+      score_fast: 63          # score = mean of 3m and 6m return
+      score_slow: 126
+      min_score: 0.0          # absolute filter: cash beats the least-bad long
+      exit_rank: 3            # exit when it drops out of the top 3
+      stop_atr_mult: 3.0      # wide stop: trends need room
+      atr_period: 14
+
+risk:
+  risk_per_trade_pct: 1.0       # % of equity risked between entry and stop
+  max_position_notional_pct: 30 # single position <= 30% of equity
+  max_gross_exposure_pct: 100   # cash account: never exceed settled cash
+  max_concurrent_positions: 3
+  max_per_bucket: 2             # allocation round 2026-07-06: bucket cap 2 +
+                                # 30% position cap lifted Sharpe 0.99 -> 1.14 IS
+                                # (held OOS at 1.08); cost is deeper drawdowns
+                                # (12% vs 8%) and occasional breaker pauses
+  max_per_bucket_overrides: {}  # per-bucket cap tightening (e.g. bucket: 1);
+                                # unused in the validated config, kept for
+                                # future universe changes
+  daily_loss_halt_pct: 2.5      # realized+unrealized day loss => halt new entries
+  weekly_loss_halt_pct: 5.0
+  max_drawdown_halt_pct: 10.0   # peak-to-trough => full circuit breaker, manual reset
+  settled_cash_only: true       # prevent good-faith violations in cash account
+  day_trade_guard: true         # block same-day round trips except protective stops
+  vol_target_pct: 0             # >0: shrink new-position risk when trailing
+  vol_lookback_days: 20         #   realized vol exceeds this annualized %
+
+execution:
+  order_type_entry: limit       # marketable limit at mid + 1/2 spread cap
+  entry_limit_offset_bps: 5
+  order_type_exit: market       # exits must fill; slippage is the cost of certainty
+  order_timeout_sec: 60         # unfilled entry limit => cancel, do not chase
+  schedule:
+    signal_time: "15:50"        # ET; compute signals near close on daily bars
+    reconcile_time: "09:00"     # ET; plus always on startup
+
+backtest:
+  start: "2016-01-04"               # Alpaca free (IEX) history begins here
+  commission_per_share: 0.0         # Alpaca: $0 commission on stocks/ETFs
+  # Regulatory pass-through fees on SELLS (Alpaca invoices these; rates
+  # change ~annually — verify against alpaca.markets docs when they reset):
+  sec_fee_per_million: 27.80        # SEC Section 31 fee on sale proceeds
+  taf_per_share: 0.000166           # FINRA TAF per share sold (cap $8.30/trade)
+  slippage_model: spread_plus_bps   # fill at mid +/- half spread + extra bps
+  extra_slippage_bps: 5
+  partial_fill_prob: 0.0            # daily-bar sizes here always fill; keep hook
+  drawdown_reset_sessions: 10       # simulated post-mortem cooldown (backtest only)
+
+service:
+  host: 127.0.0.1                   # never expose directly; Tailscale for remote
+  port: 8765
+
+monitoring:
+  disconnect_alert_min: 5           # CRIT alert after N minutes unreachable
+  kill_after_disconnect_min: 15     # arm kill-on-reconnect (0 = disable);
+                                    # stops are engine-monitored, so a long
+                                    # outage means unprotected positions
+
+alerts:
+  channels: [telegram, email]
+  alert_on: [disconnect, order_rejected, risk_limit_breach, kill_switch,
+             reconcile_mismatch, daily_summary]
+
+logging:
+  dir: logs
+  level: INFO
+  audit_db: journal/audit.sqlite

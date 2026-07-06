@@ -1,0 +1,36 @@
+# Core
+pandas>=2.2
+numpy>=1.26
+pydantic>=2.7
+pydantic-settings>=2.3
+PyYAML>=6.0
+pyarrow>=16.0         # parquet bar cache
+
+# Broker (Alpaca — same SDK for paper and live)
+alpaca-py>=0.30
+
+# Engine service (headless daemon the GUI talks to)
+fastapi>=0.111
+uvicorn[standard]>=0.30
+websockets>=12.0
+apscheduler>=3.10
+
+# Persistence / logging
+structlog>=24.1
+# sqlite3 is stdlib; audit store and cache use it
+
+# Secrets (uses macOS Keychain locally; falls back to env vars)
+keyring>=25.0
+
+# Alerts
+requests>=2.32          # Telegram bot API
+# smtplib is stdlib for email fallback
+
+# Research only (parameter sweeps; NOT the validation backtester)
+vectorbt>=0.26 ; python_version < "3.13"
+matplotlib>=3.9
+
+# Dev / test
+pytest>=8.2
+httpx>=0.27
+freezegun>=1.5

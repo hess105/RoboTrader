@@ -1,0 +1,3 @@
+mode: paper
+# Paper inherits base.yaml unchanged: paper must mirror intended live config
+# exactly, or the paper->live gate proves nothing.
