@@ -1,19 +1,17 @@
 # syntax=docker/dockerfile:1
 
-########################################
-# Stage 1: build the React/Vite dashboard
-########################################
-FROM node:20-slim AS gui-builder
-WORKDIR /gui
-COPY gui/web/package.json gui/web/package-lock.json ./
-RUN npm ci
-COPY gui/web ./
-RUN npm run build
-
-########################################
-# Stage 2: runtime image
-########################################
+# No Node build stage on purpose: building the Vite/TypeScript dashboard
+# is CPU/memory-heavy and pointless to run on a $6/mo droplet every
+# deploy. Build it once on your laptop (`make gui-build`) and it's served
+# via the bind mount in docker-compose.yml (./gui/web/dist), same as
+# config/. This image only ever needs Python.
 FROM python:3.12-slim AS runtime
+
+# Explicit, not the default debconf auto-fallback: there's no TTY in a
+# Docker build, so apt would otherwise print "unable to initialize
+# frontend: Teletype" warnings (harmless, but noisy) before falling back
+# to this anyway.
+ENV DEBIAN_FRONTEND=noninteractive
 
 # gcc: some deps (e.g. numba/llvmlite via vectorbt) need to build from
 # source on platforms without a prebuilt wheel; sqlite3: CLI for
@@ -31,9 +29,8 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-COPY --from=gui-builder /gui/dist ./gui/web/dist
 
-RUN mkdir -p journal/backtests logs data/cache exports \
+RUN mkdir -p gui/web/dist journal/backtests logs data/cache exports \
     && chown -R robotrader:robotrader /app
 
 USER robotrader

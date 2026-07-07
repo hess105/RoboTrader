@@ -30,18 +30,39 @@ This script (`deploy/docker-install.sh`):
 - creates a dedicated `robotrader` system user (in the `docker` group, not `sudo`)
 - enables `ufw` (SSH only) and `fail2ban`
 - clones the repo to `/opt/robotrader`
+- adds a 2 GB swapfile if none exists (cheap droplets ship with none, and
+  `pip install` alone can get close to 1 GB of RAM on the smallest plan)
 - creates empty, `chmod 600` placeholder files under `/opt/robotrader/secrets/`
   for every credential (Docker Compose secrets need the file to exist even
   if you don't use that channel — e.g. you can leave the live-key and SMTP
   files empty if you only use Telegram alerts and paper trading)
-- builds the Docker image (multi-stage: Node builds the React dashboard,
-  then it's copied into the Python runtime image — no Node install needed
-  on the droplet itself)
+- builds the Docker image — **Python only.** The image never runs Node/npm;
+  see step 3a for the dashboard.
 
 If you'd rather read it before running it, it's a plain bash script — see
 [deploy/docker-install.sh](../deploy/docker-install.sh).
 
-## 3. Credentials — Docker secrets, not the OS keychain
+## 3a. The dashboard — built on your laptop, not the droplet
+
+Building the React/Vite dashboard (`npm ci` + `tsc` + `vite build`) is
+CPU/memory-heavy for what a $6/mo droplet has to offer, and there's no reason
+to pay that cost on every deploy. So the Docker image deliberately contains
+no Node at all — `docker-compose.yml` bind-mounts `gui/web/dist` into the
+container the same way it mounts `config/`. If that directory is empty, the
+engine just serves a "GUI not built" JSON fallback at `:8765` instead of
+failing.
+
+On your laptop (which has Node already, from local dev):
+
+```bash
+make gui-build      # writes gui/web/dist/
+rsync -az gui/web/dist/ robotrader@<droplet-ip>:/opt/robotrader/gui/web/dist/
+```
+
+Do this once, and again any time you change the dashboard. Everything else
+(`git pull` on the droplet, `docker compose build`) never touches it.
+
+## 3b. Credentials — Docker secrets, not the OS keychain
 
 Headless Linux has no Secret Service for `keyring`, so `core/settings.py`
 falls back to reading credentials from environment variables, or — new for
@@ -142,7 +163,9 @@ docker compose up -d
 
 Config changes in `config/*.yaml` take effect on the next restart — they're
 bind-mounted read-only, not baked into the image, so `git pull` alone is
-enough for a config-only change (`docker compose restart engine`).
+enough for a config-only change (`docker compose restart engine`). If the
+dashboard itself changed, redo step 3a's `make gui-build` + `rsync` too —
+`git pull` alone does not update it.
 
 ## Local development (macOS or otherwise, no Docker)
 

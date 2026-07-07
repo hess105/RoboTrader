@@ -41,6 +41,21 @@ apt update
 apt install -y ca-certificates curl gnupg ufw fail2ban
 
 ############################################
+# Swap — small droplets (1 GB RAM) ship with none, and the GUI's Docker
+# build stage (npm ci + tsc + vite for the React dashboard) gets OOM-killed
+# without it. 2 GB swap is enough headroom for the build; the engine itself
+# barely uses any memory at runtime.
+############################################
+
+if [[ "$(swapon --show | wc -l)" -eq 0 ]] && [[ ! -f /swapfile ]]; then
+    fallocate -l 2G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+############################################
 # Docker Engine + Compose plugin
 ############################################
 

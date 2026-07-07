@@ -66,7 +66,7 @@ clean: ## Remove venv and caches (never touches journal/ or logs/)
 
 ## --- Docker deployment (see docs/DEPLOY.md) ---
 
-docker-build: ## Build the Docker image (engine + built GUI in one image)
+docker-build: ## Build the Docker image (Python engine only — see gui-build for the dashboard)
 	docker compose build
 
 docker-up: docker-build ## Start the engine in PAPER mode, detached, restart-on-failure

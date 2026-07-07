@@ -37,6 +37,10 @@ services:
       - ./data/cache:/app/data/cache
       - ./exports:/app/exports
       - ./config:/app/config:ro
+      # Built on your laptop with `make gui-build`, then rsynced or git-pulled
+      # here — never built inside the Docker image (see Dockerfile). Empty
+      # is fine: the engine serves a "GUI not built" JSON fallback instead.
+      - ./gui/web/dist:/app/gui/web/dist:ro
     ports:
       # Bind to the host's loopback only — never publish 0.0.0.0:8765.
       # Remote access is Tailscale (on the host) or an SSH tunnel, per
