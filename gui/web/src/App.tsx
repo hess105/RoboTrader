@@ -56,6 +56,7 @@ const TABS = [
   ['Risk', 'limits & halts'],
   ['Config', 'model & risk parameters'],
   ['Results', 'backtest reports'],
+  ['Sweep', 'parameter search'],
   ['Logs', 'audit trail'],
   ['Settings', 'keys & alerts'],
 ] as const
@@ -106,6 +107,7 @@ export default function App() {
         {tab === 'Risk' && <RiskPanel confirmAction={confirmAction} />}
         {tab === 'Config' && <Config />}
         {tab === 'Results' && <Results />}
+        {tab === 'Sweep' && <Sweep />}
         {tab === 'Logs' && <Logs />}
         {tab === 'Settings' && <Settings mode={mode} confirmAction={confirmAction} />}
       </main>
@@ -251,6 +253,109 @@ function Stat({ label, value, tone }: { label: string; value: unknown; tone?: 'p
       </div>
     </div>
   )
+}
+
+function ScatterChart({ points, xLabel, yLabel, height = 240 }: {
+  points: { x: number; y: number; label: string }[]
+  xLabel: string; yLabel: string; height?: number
+}) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const c = ref.current
+    if (!c || points.length === 0) return
+    const g = c.getContext('2d')!
+    const css = getComputedStyle(document.body)
+    const accent = css.getPropertyValue('--accent').trim() || '#3b82f6'
+    const border = css.getPropertyValue('--border').trim() || '#2a3345'
+    const dim = css.getPropertyValue('--dim').trim() || '#8a94a6'
+    const text = css.getPropertyValue('--text').trim() || '#e2e8f2'
+    g.clearRect(0, 0, c.width, c.height)
+
+    const pad = 36
+    const xs = points.map((p) => p.x), ys = points.map((p) => p.y)
+    const xMin = Math.min(...xs), xMax = Math.max(...xs)
+    const yMin = Math.min(...ys), yMax = Math.max(...ys)
+    const xSpan = (xMax - xMin) || 1, ySpan = (yMax - yMin) || 1
+    const px = (x: number) => pad + ((x - xMin) / xSpan) * (c.width - 2 * pad)
+    const py = (y: number) => c.height - pad - ((y - yMin) / ySpan) * (c.height - 2 * pad)
+
+    g.strokeStyle = border
+    g.lineWidth = 1
+    g.strokeRect(pad, pad / 2, c.width - 2 * pad, c.height - pad - pad / 2)
+
+    points.forEach((p) => {
+      g.beginPath()
+      g.arc(px(p.x), py(p.y), 5, 0, Math.PI * 2)
+      g.fillStyle = accent
+      g.fill()
+      g.fillStyle = text
+      g.font = '10px sans-serif'
+      g.fillText(p.label, px(p.x) + 8, py(p.y) - 8)
+    })
+
+    g.fillStyle = dim
+    g.font = '11px sans-serif'
+    g.fillText(xLabel, c.width / 2 - 30, c.height - 6)
+    g.save()
+    g.translate(12, c.height / 2 + 30)
+    g.rotate(-Math.PI / 2)
+    g.fillText(yLabel, 0, 0)
+    g.restore()
+  }, [points, xLabel, yLabel])
+  return <canvas ref={ref} className="chart" width={1100} height={height} />
+}
+
+type BarTone = 'accent' | 'warn' | 'ok' | 'bad'
+
+function GroupedBarChart({ groups, valueLabel, height = 200 }: {
+  groups: { label: string; bars: { label: string; value: number; tone: BarTone }[] }[]
+  valueLabel: string; height?: number
+}) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const c = ref.current
+    if (!c || groups.length === 0) return
+    const g = c.getContext('2d')!
+    const css = getComputedStyle(document.body)
+    const border = css.getPropertyValue('--border').trim() || '#2a3345'
+    const dim = css.getPropertyValue('--dim').trim() || '#8a94a6'
+    const toneColor = (t: BarTone) => css.getPropertyValue('--' + t).trim()
+    g.clearRect(0, 0, c.width, c.height)
+
+    const pad = 34
+    const allValues = groups.flatMap((gr) => gr.bars.map((b) => b.value))
+    const vMax = Math.max(...allValues, 0)
+    const vMin = Math.min(...allValues, 0)
+    const span = (vMax - vMin) || 1
+    const zeroY = c.height - pad - ((0 - vMin) / span) * (c.height - 2 * pad)
+
+    g.strokeStyle = border
+    g.beginPath()
+    g.moveTo(pad, zeroY)
+    g.lineTo(c.width - pad, zeroY)
+    g.stroke()
+
+    const groupWidth = (c.width - 2 * pad) / groups.length
+    groups.forEach((gr, gi) => {
+      const barWidth = groupWidth / (gr.bars.length + 1)
+      gr.bars.forEach((b, bi) => {
+        const x = pad + gi * groupWidth + (bi + 0.5) * barWidth
+        const barY = c.height - pad - ((b.value - vMin) / span) * (c.height - 2 * pad)
+        const top = Math.min(barY, zeroY)
+        const h = Math.max(1, Math.abs(barY - zeroY))
+        g.fillStyle = toneColor(b.tone)
+        g.fillRect(x - barWidth * 0.35, top, barWidth * 0.7, h)
+      })
+      g.fillStyle = dim
+      g.font = '10px sans-serif'
+      g.fillText(gr.label, pad + gi * groupWidth + groupWidth / 2 - 12, c.height - 8)
+    })
+
+    g.fillStyle = dim
+    g.font = '11px sans-serif'
+    g.fillText(valueLabel, 6, 14)
+  }, [groups, valueLabel])
+  return <canvas ref={ref} className="chart" width={1100} height={height} />
 }
 
 /* -------------------------------------------------- Dashboard ---- */
@@ -783,6 +888,197 @@ function Results() {
                 Showing the most recent {shown.length} of {filtered.length} filtered trades.
               </div>
             )}
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
+/* --------------------------------------------------------- Sweep ---- */
+
+function RunSweepPanel({ onDone }: { onDone: (runId: string) => void }) {
+  const [nSamples, setNSamples] = useState('250')
+  const [workers, setWorkers] = useState('4')
+  const [isEnd, setIsEnd] = useState('2021-12-31')
+  const [oosStart, setOosStart] = useState('2022-01-01')
+  const [job, setJob] = useState<any | null>(null)
+  const seenRunId = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (job?.status !== 'running') return
+    let alive = true
+    const id = setInterval(() => {
+      j<any>('/sweeps/run/status').then((s) => {
+        if (!alive) return
+        setJob(s)
+        if (s.status === 'done' && s.run_id !== seenRunId.current) {
+          seenRunId.current = s.run_id
+          onDone(s.run_id)
+        }
+      }).catch(() => {})
+    }, 3000)
+    return () => { alive = false; clearInterval(id) }
+  }, [job?.status, onDone])
+
+  const run = () => {
+    post('/sweeps/run', {
+      n_samples: +nSamples || 250, workers: +workers || 4,
+      is_end: isEnd, oos_start: oosStart,
+    }).then(() => setJob({ status: 'running', message: 'starting…' }))
+      .catch((e) => alert(e.message))
+  }
+
+  const running = job?.status === 'running'
+
+  return (
+    <div className="card">
+      <h3>Run Parameter Sweep<small>joint search, both sleeves + allocation — scripts/sweep_full.py</small></h3>
+      <div className="row">
+        <input style={{ width: 90 }} value={nSamples} onChange={(e) => setNSamples(e.target.value)}
+               title="random combos to sample" placeholder="n-samples" />
+        <input style={{ width: 70 }} value={workers} onChange={(e) => setWorkers(e.target.value)}
+               title="parallel workers (capped to CPU count)" placeholder="workers" />
+        <input type="date" value={isEnd} onChange={(e) => setIsEnd(e.target.value)}
+               title="in-sample end date" />
+        <input type="date" value={oosStart} onChange={(e) => setOosStart(e.target.value)}
+               title="out-of-sample start date" />
+        <button className="btn" disabled={running} onClick={run}>
+          {running ? 'Running…' : 'Run Sweep'}
+        </button>
+        {running && <span className="muted">{job.message}</span>}
+        {job?.status === 'error' && <span className="neg">{job.error}</span>}
+      </div>
+      <div className="muted" style={{ marginTop: 8 }}>
+        A winner here is a candidate only — it still needs a fresh <code>make backtest</code>
+        {' '}Gate 1 run before touching config/base.yaml. On a 1-vCPU droplet, workers are
+        capped to 1 and a large sweep can take a while — this is a research tool, not a live
+        operation, so let it run in the background.
+      </div>
+    </div>
+  )
+}
+
+function Sweep() {
+  const runs = usePoll(useCallback(() => j<any[]>('/sweeps'), []), 10000)
+  const [detail, setDetail] = useState<any | null>(null)
+
+  const openRun = useCallback((id: string) => {
+    j('/sweeps/' + id).then(setDetail).catch((e) => alert(e.message))
+  }, [])
+
+  return (
+    <>
+      <RunSweepPanel onDone={openRun} />
+
+      <div className="card">
+        <h3>Sweep Runs<small>click a run to open</small></h3>
+        <table>
+          <thead>
+            <tr><th>Run</th><th>Sampled</th><th>Full grid</th><th>Eligible</th>
+                <th>Profitable folds</th></tr>
+          </thead>
+          <tbody>
+            {(runs ?? []).map((r) => (
+              <tr key={r.run_id} className="clickable" onClick={() => openRun(r.run_id)}>
+                <td>{r.run_id}</td>
+                <td>{r.n_samples}</td>
+                <td>{r.full_grid_size}</td>
+                <td className={r.eligible ? 'pos' : 'neg'}>{r.eligible ? 'yes' : 'no'}</td>
+                <td>{r.profitable_folds ?? '—'}</td>
+              </tr>
+            ))}
+            {(runs ?? []).length === 0 && (
+              <tr><td colSpan={5} className="muted">No sweeps yet — run one above.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {detail && detail.eligible === false && (
+        <div className="card">
+          <h3>{detail.run_id}</h3>
+          <div className="muted">
+            No sampled combo survived 2x cost stress with enough trades in-sample.
+            Widen n-samples, or this region of the space isn't promising.
+          </div>
+        </div>
+      )}
+
+      {detail && detail.eligible && (
+        <>
+          {detail.overfit_warning && (
+            <div className="card" style={{ borderColor: 'var(--bad)' }}>
+              <h3 style={{ color: 'var(--bad)' }}>Overfitting Warning</h3>
+              <div>{detail.overfit_warning}</div>
+            </div>
+          )}
+
+          <div className="card">
+            <h3>{detail.run_id}<small>top {detail.is_top.length} in-sample — Sharpe vs Max Drawdown</small></h3>
+            <ScatterChart
+              points={detail.is_top.map((r: any, i: number) => ({
+                x: r.maxdd, y: r.sharpe, label: `#${i + 1}`,
+              }))}
+              xLabel="Max Drawdown %" yLabel="Sharpe"
+            />
+          </div>
+
+          <div className="card">
+            <h3>Top {detail.is_top.length} In-Sample Combos</h3>
+            <table>
+              <thead>
+                <tr><th>#</th><th>Trades</th><th>Sharpe</th><th>PF</th><th>Max DD</th>
+                    <th>Return</th><th>2x PF</th><th>OK</th></tr>
+              </thead>
+              <tbody>
+                {detail.is_top.map((r: any, i: number) => (
+                  <tr key={i}>
+                    <td>{i + 1}</td>
+                    <td>{r.trades}</td>
+                    <td>{r.sharpe}</td>
+                    <td>{r.pf}</td>
+                    <td>{r.maxdd}%</td>
+                    <td className={r.ret >= 0 ? 'pos' : 'neg'}>{r.ret}%</td>
+                    <td>{r.pf2x}</td>
+                    <td className={r.ok2x ? 'pos' : 'neg'}>{r.ok2x ? 'PASS' : 'FAIL'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="card">
+            <h3>In-Sample vs Out-of-Sample<small>top {detail.oos_top.length} candidates, judged once OOS</small></h3>
+            <GroupedBarChart
+              groups={detail.oos_top.map((r: any, i: number) => ({
+                label: `#${i + 1}`,
+                bars: [
+                  { label: 'IS', value: detail.is_top[i]?.sharpe ?? 0, tone: 'accent' as const },
+                  { label: 'OOS', value: r.sharpe, tone: 'warn' as const },
+                ],
+              }))}
+              valueLabel="Sharpe"
+            />
+          </div>
+
+          <div className="card">
+            <h3>Walk-Forward Folds<small>{detail.profitable_folds}/4 profitable (gate needs ≥ 3)</small></h3>
+            <GroupedBarChart
+              groups={detail.folds.map((f: any) => ({
+                label: f.start.slice(0, 4),
+                bars: [{ label: 'Return %', value: f.ret, tone: f.ret >= 0 ? 'ok' : 'bad' }],
+              }))}
+              valueLabel="Return %"
+            />
+            <div className="subcard" style={{ marginTop: 10 }}>
+              <h4>Winner</h4>
+              <div className="kv">
+                {Object.entries(detail.winner).map(([k, v]) => (
+                  <Item key={k} label={k} value={v as any} />
+                ))}
+              </div>
+            </div>
           </div>
         </>
       )}

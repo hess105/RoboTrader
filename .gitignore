@@ -184,5 +184,6 @@ logs/*
 !logs/.gitkeep
 journal/*.sqlite
 journal/backtests/
+journal/sweeps/
 data/cache/
 exports/

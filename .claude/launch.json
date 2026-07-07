@@ -2,10 +2,11 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "engine",
-      "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["-m", "service.engine", "--config", "config/paper.yaml"],
-      "port": 8765,
+      "name": "gui-dev-temp",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "gui/web",
+      "port": 5173,
       "autoPort": false
     }
   ]
