@@ -82,6 +82,16 @@ systemctl enable --now docker
 if ! id "$APP_USER" >/dev/null 2>&1; then
     adduser --disabled-password --gecos "" "$APP_USER"
 fi
+
+# So `rsync .../$APP_USER@<droplet>:...` (for gui/web/dist, see docs/DEPLOY.md
+# step 3a) and direct SSH as $APP_USER work with the same key that got you
+# onto the box as root — adduser alone doesn't copy authorized_keys.
+if [[ -f /root/.ssh/authorized_keys ]]; then
+    install -d -m 700 -o "$APP_USER" -g "$APP_USER" "/home/$APP_USER/.ssh"
+    cp /root/.ssh/authorized_keys "/home/$APP_USER/.ssh/authorized_keys"
+    chown "$APP_USER:$APP_USER" "/home/$APP_USER/.ssh/authorized_keys"
+    chmod 600 "/home/$APP_USER/.ssh/authorized_keys"
+fi
 usermod -aG docker "$APP_USER"
 
 ############################################
