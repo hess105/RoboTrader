@@ -12,7 +12,7 @@ GUI_DIR := gui/web
 
 .DEFAULT_GOAL := help
 .PHONY: help install keys-paper keys-live test backtest paper live gui gui-build kill tax clean \
-        docker-build docker-up docker-down docker-logs docker-live docker-kill
+        docker-build docker-up docker-down docker-logs docker-live docker-kill deploy
 
 help: ## Show this help
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[1m%-12s\033[0m %s\n", $$1, $$2}'
@@ -83,3 +83,6 @@ docker-live: docker-build ## Start the engine in LIVE mode, attached (must type 
 
 docker-kill: ## KILL SWITCH against the running container: cancel orders, flatten positions, halt
 	docker compose exec engine python -m scripts.kill --reason "manual via make docker-kill"
+
+deploy: ## Push + build GUI + sync + rebuild/restart on the droplet (deploy/push-update.sh)
+	deploy/push-update.sh
