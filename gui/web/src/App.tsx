@@ -62,6 +62,7 @@ const TABS = [
   ['Config', 'model & risk parameters'],
   ['Results', 'backtest reports'],
   ['Sweep', 'parameter search'],
+  ['Simulate', 'dry-run a full day + notifications'],
   ['Journal', 'what happened, at a glance'],
   ['Logs', 'audit trail'],
   ['Processes', 'engine + jobs'],
@@ -115,6 +116,7 @@ export default function App() {
         {tab === 'Config' && <Config />}
         {tab === 'Results' && <Results />}
         {tab === 'Sweep' && <Sweep />}
+        {tab === 'Simulate' && <Simulate />}
         {tab === 'Journal' && <Journal />}
         {tab === 'Logs' && <Logs />}
         {tab === 'Processes' && <Processes />}
@@ -648,34 +650,49 @@ function Config() {
 
 /* ----------------------------------------------------- Blotter ---- */
 
+function OrderTable({ rows, empty }: { rows: any[]; empty: string }) {
+  return (
+    <table>
+      <thead>
+        <tr><th>Time</th><th>Symbol</th><th>Side</th><th>Notional</th><th>Qty</th>
+            <th>Status</th><th>Client ID</th></tr>
+      </thead>
+      <tbody>
+        {rows.map((o) => (
+          <tr key={o.client_order_id}>
+            <td>{(o.ts || '').slice(0, 19).replace('T', ' ')}</td>
+            <td><b>{o.symbol}</b></td>
+            <td className={o.side === 'buy' ? 'pos' : 'neg'}>{o.side}</td>
+            <td>{o.notional ? fmt$(o.notional) : ''}</td>
+            <td>{o.qty ?? ''}</td>
+            <td>{o.status}</td>
+            <td className="muted">{o.client_order_id}</td>
+          </tr>
+        ))}
+        {rows.length === 0 && (
+          <tr><td colSpan={7} className="muted">{empty}</td></tr>
+        )}
+      </tbody>
+    </table>
+  )
+}
+
 function Blotter() {
   const orders = usePoll(useCallback(() => j<any[]>('/orders'), []), 3000)
+  const all = orders ?? []
+  const scheduled = all.filter((o) => o.status === 'queued_open')
+  const rest = all.filter((o) => o.status !== 'queued_open')
   return (
-    <div className="card">
-      <h3>Order & Fill Blotter</h3>
-      <table>
-        <thead>
-          <tr><th>Time</th><th>Symbol</th><th>Side</th><th>Notional</th><th>Qty</th>
-              <th>Status</th><th>Client ID</th></tr>
-        </thead>
-        <tbody>
-          {(orders ?? []).map((o) => (
-            <tr key={o.client_order_id}>
-              <td>{(o.ts || '').slice(0, 19).replace('T', ' ')}</td>
-              <td><b>{o.symbol}</b></td>
-              <td className={o.side === 'buy' ? 'pos' : 'neg'}>{o.side}</td>
-              <td>{o.notional ? fmt$(o.notional) : ''}</td>
-              <td>{o.qty ?? ''}</td>
-              <td>{o.status}</td>
-              <td className="muted">{o.client_order_id}</td>
-            </tr>
-          ))}
-          {(orders ?? []).length === 0 && (
-            <tr><td colSpan={7} className="muted">No orders on record.</td></tr>
-          )}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="card">
+        <h3>Scheduled<small>queued at close, not yet submitted to the broker</small></h3>
+        <OrderTable rows={scheduled} empty="Nothing scheduled." />
+      </div>
+      <div className="card">
+        <h3>Order & Fill Blotter</h3>
+        <OrderTable rows={rest} empty="No orders on record." />
+      </div>
+    </>
   )
 }
 
@@ -1202,6 +1219,87 @@ function Sweep() {
   )
 }
 
+/* --------------------------------------------------- Simulate ---- */
+
+function Simulate() {
+  const [job, setJob] = useState<any | null>(null)
+
+  useEffect(() => {
+    if (job?.status !== 'running') return
+    let alive = true
+    const id = setInterval(() => {
+      j<any>('/simulate/run/status').then((s) => { if (alive) setJob(s) }).catch(() => {})
+    }, 2000)
+    return () => { alive = false; clearInterval(id) }
+  }, [job?.status])
+
+  const run = () => {
+    post('/simulate/run')
+      .then(() => setJob({ status: 'running', message: 'starting…' }))
+      .catch((e) => alert(e.message))
+  }
+  const stop = () => { post('/simulate/run/stop').catch((e) => alert(e.message)) }
+  const running = job?.status === 'running'
+  const orders: any[] = job?.status === 'done' ? job.orders ?? [] : []
+  const events: any[] = job?.status === 'done' ? job.events ?? [] : []
+
+  return (
+    <>
+      <div className="card">
+        <h3>Simulate a Trading Day<small>
+          dry-run of signals → order requests → fills → alerts, against a paper
+          config with a fake broker — never touches the real broker or journal
+        </small></h3>
+        <div className="row">
+          <button className="btn" disabled={running} onClick={run}>
+            {running ? 'Running…' : 'Run Simulated Day'}
+          </button>
+          {running && (
+            <button className="btn" style={{ borderColor: 'var(--bad)', color: 'var(--bad)' }}
+                    onClick={stop}>Stop</button>
+          )}
+          {running && <span className="muted">{job.message}</span>}
+          {job?.status === 'stopped' && <span className="muted">Stopped.</span>}
+          {job?.status === 'error' && <span className="neg">{job.error}</span>}
+        </div>
+        <p className="muted">
+          Notifications from this run arrive on your real Telegram/email channel,
+          prefixed <b>[SIMULATION]</b> so they're never confused with real trading
+          alerts. Simulated orders live only in an in-memory audit log for this
+          run — they never appear in the real Blotter/Journal.
+        </p>
+      </div>
+      {job?.status === 'done' && (
+        <>
+          <div className="card">
+            <h3>Simulated Orders</h3>
+            <OrderTable rows={orders} empty="No simulated orders." />
+          </div>
+          <div className="card">
+            <h3>Simulated Events</h3>
+            <table>
+              <thead><tr><th>Time</th><th>Kind</th><th>Symbol</th><th>Detail</th></tr></thead>
+              <tbody>
+                {events.map((e, i) => (
+                  <tr key={i}>
+                    <td>{(e.ts || '').slice(0, 19).replace('T', ' ')}</td>
+                    <td>{e.kind}</td>
+                    <td>{e.symbol ?? ''}</td>
+                    <td className="muted">{e.reason || e.detail || ''}</td>
+                  </tr>
+                ))}
+                {events.length === 0 && (
+                  <tr><td colSpan={4} className="muted">No simulated events.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
 /* ------------------------------------------------------ Journal ---- */
 
 const JOURNAL_TONE: Record<string, string> = {
@@ -1420,6 +1518,40 @@ function Processes() {
 
 /* ---------------------------------------------------- Settings ---- */
 
+const ALERT_KIND_LABELS: Record<string, string> = {
+  order: 'Order requests (queued/cancelled)',
+  fill: 'Fills',
+  risk: 'Risk limit warnings',
+  kill_switch: 'Kill switch',
+  reconcile: 'Reconcile mismatches',
+  health: 'Connectivity',
+  engine: 'Engine startup/recovery',
+  strategy: 'Strategy pause/resume',
+  summary: 'Daily summary',
+}
+
+function PushNotifications() {
+  const prefs = usePoll(useCallback(() => j<Record<string, boolean>>('/alerts/prefs'), []), 5000)
+  const [pending, setPending] = useState<Record<string, boolean>>({})
+  const toggle = (kind: string, enabled: boolean) => {
+    setPending((p) => ({ ...p, [kind]: enabled }))
+    post('/alerts/prefs', { kind, enabled }).catch((e) => alert(e.message))
+  }
+  const merged = { ...(prefs ?? {}), ...pending }
+  return (
+    <div className="card">
+      <h3>Push Notifications<small>which alert categories reach Telegram/email</small></h3>
+      {Object.keys(ALERT_KIND_LABELS).map((kind) => (
+        <label key={kind} className="check" style={{ cursor: 'pointer' }}>
+          <span>{ALERT_KIND_LABELS[kind]}</span>
+          <input type="checkbox" checked={merged[kind] ?? true}
+                 onChange={(e) => toggle(kind, e.target.checked)} />
+        </label>
+      ))}
+    </div>
+  )
+}
+
 function Settings({ mode, confirmAction }: { mode: string; confirmAction: (t: string) => boolean }) {
   const [keyMode, setKeyMode] = useState('paper')
   const [keyId, setKeyId] = useState('')
@@ -1436,6 +1568,7 @@ function Settings({ mode, confirmAction }: { mode: string; confirmAction: (t: st
           <span className="muted">Gate 2 requires a verified end-to-end alert.</span>
         </div>
       </div>
+      <PushNotifications />
       <div className="card">
         <h3>Broker API Keys<small>write-only, straight to OS keychain</small></h3>
         <div className="row">

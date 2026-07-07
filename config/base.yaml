@@ -109,8 +109,11 @@ monitoring:
 
 alerts:
   channels: [telegram, email]
-  alert_on: [disconnect, order_rejected, risk_limit_breach, kill_switch,
-             reconcile_mismatch, daily_summary]
+  # Default push-notification categories, seeded into journal/alert_prefs.json
+  # on first run only (monitoring/alerts.py) — after that, the GUI Settings
+  # tab's toggles are the source of truth and this list is ignored.
+  alert_on: [engine, risk, order, summary, strategy, reconcile, fill,
+             kill_switch, health]
 
 logging:
   dir: logs

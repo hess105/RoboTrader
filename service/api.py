@@ -25,6 +25,7 @@ from monitoring.log_buffer import clear as clear_log_buffer
 from monitoring.log_buffer import recent as recent_logs
 from monitoring.process_status import process_status
 from service.backtest_jobs import runner as backtest_runner
+from service.simulation_jobs import runner as simulation_runner
 from service.sweep_jobs import runner as sweep_runner
 
 GUI_DIST = Path(__file__).resolve().parent.parent / "gui" / "web" / "dist"
@@ -71,6 +72,11 @@ class RunBacktestBody(BaseModel):
     start: str | None = None
     end: str | None = None
     label: str | None = None
+
+
+class AlertPrefBody(BaseModel):
+    kind: str
+    enabled: bool
 
 
 class RunSweepBody(BaseModel):
@@ -152,6 +158,14 @@ def create_app(engine) -> FastAPI:
         engine.test_alerts()
         return {"sent": True}
 
+    @app.get("/alerts/prefs")
+    def alerts_prefs():
+        return engine.alerts.prefs
+
+    @app.post("/alerts/prefs")
+    def alerts_prefs_set(body: AlertPrefBody):
+        return engine.alerts.set_pref(body.kind, body.enabled)
+
     @app.get("/logs")
     def logs(kind: str | None = None, q: str | None = None, limit: int = 300):
         rows = engine.audit.query(kind or None, limit=limit)
@@ -231,6 +245,27 @@ def create_app(engine) -> FastAPI:
     @app.post("/backtests/run/stop")
     def backtests_run_stop():
         stopped = backtest_runner.stop()
+        return {"stopped": stopped}
+
+    @app.post("/simulate/run")
+    def simulate_run():
+        # Always runs against config/paper.yaml in a fully isolated engine
+        # (fake broker writes, in-memory audit) — see service/simulate_day.py.
+        # Safe regardless of the live engine's mode; refused only to avoid
+        # a redundant subprocess if one is already in flight.
+        try:
+            simulation_runner.start()
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc))
+        return {"started": True}
+
+    @app.get("/simulate/run/status")
+    def simulate_run_status():
+        return simulation_runner.status()
+
+    @app.post("/simulate/run/stop")
+    def simulate_run_stop():
+        stopped = simulation_runner.stop()
         return {"stopped": stopped}
 
     @app.get("/sweeps")

@@ -65,14 +65,14 @@ class PortfolioState:
 
 
 class TradingEngine:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, broker=None, audit=None, alerts=None):
         self.settings = settings
         self.cfg = settings.raw
-        self.audit = AuditLog(self.cfg["logging"]["audit_db"])
-        self.alerts = Alerter(self.cfg)
-        self.risk = RiskManager(self.cfg, self.audit, self.alerts)
+        self.audit = audit or AuditLog(self.cfg["logging"]["audit_db"])
+        self.alerts = alerts or Alerter(self.cfg)
         creds = broker_creds(settings.mode)
-        self.broker = AlpacaExecution(creds, settings.mode)
+        self.broker = broker or AlpacaExecution(creds, settings.mode)
+        self.risk = RiskManager(self.cfg, self.audit, self.alerts)
         self.data = AlpacaData(creds.key_id.get_secret_value(),
                                creds.secret_key.get_secret_value())
         self.om = OrderManager(self.broker, self.audit, self.alerts)
