@@ -15,7 +15,9 @@ Startup sequence (order matters):
               state; overnight breaker trips cancel them)
        09:00  reconcile + clear day-trade ledger
        every minute 09:00-16:59  tick: health, equity mark -> breakers,
-              fill sync, engine-side protective stop monitor
+              fill sync, engine-side protective stop monitor, and (after
+              09:35 only) a resilience-net resubmit of any queued_open
+              intents still stuck from a missed/late 9:35 run
        16:20  daily summary alert
   5. serve control API + GUI on 127.0.0.1:8765 (Tailscale for phone access;
      never expose the port directly)
@@ -27,7 +29,7 @@ and the healthchecks.io dead-man ping.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -155,6 +157,8 @@ class TradingEngine:
                 qty=float(intent.qty) if intent.qty else None, status="queued_open")
             self.audit.event("order_queued", symbol=sig.symbol, side=sig.side.value,
                              order_id=intent.client_order_id, reason=sig.reason)
+            self.alerts.send("INFO", "order",
+                             f"queued {sig.side.value} {sig.symbol}: {sig.reason}")
             if sig.side is Side.BUY:
                 self.portfolio.pending_entries.add(sig.symbol)
                 if sig.stop_price is not None:
@@ -169,6 +173,16 @@ class TradingEngine:
         halt state — an overnight breaker trip cancels them, exits proceed."""
         self.portfolio.bought_today.clear()
         self.refresh_portfolio()
+        self._submit_pending_orders()
+        self.refresh_portfolio()
+
+    def _submit_pending_orders(self) -> None:
+        """Submit any queued_open intents against the current halt state.
+        Called by the 9:35 cron, and again from tick() (09:35+ only) as a
+        resilience net — a missed/late 9:35 run (restart, outage) still gets
+        submitted same-day instead of sitting queued until tomorrow. Under
+        normal operation the 9:35 run empties the queue, so this is a no-op
+        the rest of the day."""
         for row in self.audit.orders_by_status("queued_open"):
             cid, side = row["client_order_id"], Side(row["side"])
             if side is Side.BUY and self.risk.halt != HaltState.NONE:
@@ -176,6 +190,9 @@ class TradingEngine:
                 self.audit.event("order_cancelled", order_id=cid,
                                  reason=f"halted at open: {self.risk.halt}")
                 self.portfolio.pending_entries.discard(row["symbol"])
+                self.alerts.send("WARN", "order",
+                                 f"cancelled {row['symbol']} {side.value}: "
+                                 f"halted ({self.risk.halt})")
                 continue
             intent = OrderIntent(
                 client_order_id=cid,
@@ -188,7 +205,6 @@ class TradingEngine:
             self.om.execute(intent)
             if side is Side.BUY:
                 self.portfolio.bought_today.add(row["symbol"])
-        self.refresh_portfolio()
 
     def tick(self) -> None:
         """Every minute in market hours: health, breakers, fills, stops."""
@@ -208,6 +224,8 @@ class TradingEngine:
         self.risk.on_mark(datetime.now(timezone.utc), self.portfolio.equity)
         self._sync_fills()
         self._check_stops()
+        if datetime.now(NY).time() >= time(9, 35):
+            self._submit_pending_orders()
 
     def reconcile_job(self):
         report = self.recon.run()

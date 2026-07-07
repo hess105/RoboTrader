@@ -1,0 +1,92 @@
+<svg viewBox="0 0 900 760" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>RoboTrader signal-to-order pipeline</title>
+<desc>Daily bars feed two strategy sleeves at 16:15 ET; their signals merge through a composite router into the risk manager, which sizes and gates every trade before submission at the 09:35 ET open. Three additional triggers feed the same risk manager: a once-a-minute protective stop check, a 09:00 ET and startup reconciliation check, and the kill switch, which alone bypasses the risk gate entirely and sells directly to the broker.</desc>
+
+<rect width="900" height="760" fill="#0f1420"/>
+
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#3b82f6"/>
+  </marker>
+  <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#ef4444"/>
+  </marker>
+  <marker id="arrowDim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#8a94a6"/>
+  </marker>
+</defs>
+
+<!-- title -->
+<text x="30" y="38" fill="#e2e8f2" font-size="20" font-weight="700" font-family="-apple-system,Segoe UI,sans-serif">Signal &#8594; Order Pipeline</text>
+<text x="30" y="58" fill="#8a94a6" font-size="12" font-family="-apple-system,Segoe UI,sans-serif">strategies/*.py &#8594; risk/manager.py &#8594; execution/*.py</text>
+
+<!-- 1. Data -->
+<rect x="150" y="80" width="220" height="60" rx="10" fill="#171d2b" stroke="#2a3345"/>
+<text x="260" y="105" fill="#e2e8f2" font-size="14" font-weight="700" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">Alpaca Daily Bars</text>
+<text x="260" y="123" fill="#8a94a6" font-size="11" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">EOD close, cache-first</text>
+
+<line x1="260" y1="140" x2="260" y2="182" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="272" y="164" fill="#3b82f6" font-size="11" font-weight="600" font-family="-apple-system,Segoe UI,sans-serif">16:15 ET &#8212; compute</text>
+
+<!-- 2. two sleeves -->
+<rect x="40" y="182" width="210" height="66" rx="10" fill="#171d2b" stroke="#2a3345"/>
+<text x="145" y="208" fill="#e2e8f2" font-size="14" font-weight="700" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">Trend Pullback</text>
+<text x="145" y="226" fill="#8a94a6" font-size="11" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">RSI(2) washout, daily</text>
+<text x="145" y="240" fill="#8a94a6" font-size="11" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">above 200-SMA</text>
+
+<rect x="270" y="182" width="210" height="66" rx="10" fill="#171d2b" stroke="#2a3345"/>
+<text x="375" y="208" fill="#e2e8f2" font-size="14" font-weight="700" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">Momentum Rotation</text>
+<text x="375" y="226" fill="#8a94a6" font-size="11" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">weekly rank rotation</text>
+<text x="375" y="240" fill="#8a94a6" font-size="11" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">first ISO weekday</text>
+
+<line x1="180" y1="248" x2="245" y2="300" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="340" y1="248" x2="270" y2="300" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<!-- 3. composite -->
+<rect x="150" y="304" width="220" height="56" rx="10" fill="#171d2b" stroke="#2a3345"/>
+<text x="260" y="328" fill="#e2e8f2" font-size="14" font-weight="700" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">Composite Router</text>
+<text x="260" y="346" fill="#8a94a6" font-size="11" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">dedupe, sleeve ownership</text>
+
+<line x1="260" y1="360" x2="260" y2="410" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="272" y="392" fill="#8a94a6" font-size="11" font-family="-apple-system,Segoe UI,sans-serif">signals (buy / sell)</text>
+
+<!-- 4. risk manager (central gate) -->
+<rect x="110" y="414" width="300" height="86" rx="12" fill="#1e2637" stroke="#3b82f6" stroke-width="2"/>
+<text x="260" y="446" fill="#e2e8f2" font-size="16" font-weight="700" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">Risk Manager</text>
+<text x="260" y="466" fill="#8a94a6" font-size="11" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">position sizing + halt gate</text>
+<text x="260" y="483" fill="#8a94a6" font-size="11" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">the only path to an order</text>
+
+<line x1="260" y1="500" x2="260" y2="552" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="272" y="532" fill="#3b82f6" font-size="11" font-weight="600" font-family="-apple-system,Segoe UI,sans-serif">09:35 ET &#8212; submit at open</text>
+
+<!-- 5. broker -->
+<rect x="150" y="556" width="220" height="58" rx="10" fill="#171d2b" stroke="#2a3345"/>
+<text x="260" y="581" fill="#e2e8f2" font-size="14" font-weight="700" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">Alpaca Broker</text>
+<text x="260" y="599" fill="#8a94a6" font-size="11" text-anchor="middle" font-family="-apple-system,Segoe UI,sans-serif">order placed / filled</text>
+
+<!-- side chips: other triggers into the same gate -->
+<rect x="540" y="404" width="300" height="50" rx="9" fill="#171d2b" stroke="#2a3345"/>
+<text x="558" y="424" fill="#e2e8f2" font-size="12" font-weight="700" font-family="-apple-system,Segoe UI,sans-serif">Every 1 min (tick)</text>
+<text x="558" y="440" fill="#8a94a6" font-size="11" font-family="-apple-system,Segoe UI,sans-serif">protective stop hit &#8594; SELL signal</text>
+<line x1="540" y1="429" x2="412" y2="440" stroke="#8a94a6" stroke-width="1.5" marker-end="url(#arrowDim)"/>
+
+<rect x="540" y="464" width="300" height="50" rx="9" fill="#171d2b" stroke="#2a3345"/>
+<text x="558" y="484" fill="#e2e8f2" font-size="12" font-weight="700" font-family="-apple-system,Segoe UI,sans-serif">09:00 ET + startup</text>
+<text x="558" y="500" fill="#8a94a6" font-size="11" font-family="-apple-system,Segoe UI,sans-serif">journal/broker mismatch &#8594; halt</text>
+<line x1="540" y1="489" x2="412" y2="470" stroke="#8a94a6" stroke-width="1.5" marker-end="url(#arrowDim)"/>
+
+<rect x="540" y="524" width="300" height="56" rx="9" fill="#2a1618" stroke="#ef4444"/>
+<text x="558" y="546" fill="#ef4444" font-size="12" font-weight="700" font-family="-apple-system,Segoe UI,sans-serif">Kill Switch</text>
+<text x="558" y="562" fill="#e2a3a3" font-size="11" font-family="-apple-system,Segoe UI,sans-serif">GUI button &#183; CLI &#183; health monitor</text>
+<text x="558" y="576" fill="#e2a3a3" font-size="11" font-family="-apple-system,Segoe UI,sans-serif">bypasses this gate entirely</text>
+
+<path d="M540,552 C420,552 400,552 375,570" fill="none" stroke="#ef4444" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowRed)"/>
+
+<!-- legend -->
+<line x1="150" y1="670" x2="180" y2="670" stroke="#3b82f6" stroke-width="2"/>
+<text x="188" y="674" fill="#8a94a6" font-size="11" font-family="-apple-system,Segoe UI,sans-serif">through the risk gate (sized, can be rejected)</text>
+<line x1="150" y1="694" x2="180" y2="694" stroke="#ef4444" stroke-width="2" stroke-dasharray="6,4"/>
+<text x="188" y="698" fill="#8a94a6" font-size="11" font-family="-apple-system,Segoe UI,sans-serif">bypasses the gate &#8212; sells only, never buys (kill switch)</text>
+
+<text x="30" y="735" fill="#4a5568" font-size="10" font-family="-apple-system,Segoe UI,sans-serif">Same code path in backtest, paper, and live &#8212; strategies/base.py, risk/manager.py, service/engine.py</text>
+</svg>

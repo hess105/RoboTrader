@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from core.models import Fill, Order, OrderIntent, Side, Signal
+from core.models import Fill, Order, OrderIntent, OrderStatus, Side, Signal
 from execution.broker import ExecutionClient
 from journal.audit import AuditLog
 
@@ -77,6 +77,10 @@ class OrderManager:
         self.audit.event("fill", symbol=fill.symbol, side=fill.side.value,
                          qty=float(fill.qty), price=float(fill.price),
                          order_id=fill.broker_order_id, detail=str(fill.ts))
+        if self.alerts is not None:
+            self.alerts.send("INFO", "fill",
+                             f"filled {fill.side.value} {float(fill.qty):g} "
+                             f"{fill.symbol} @ {float(fill.price):.2f}")
 
     def _resolve(self, intent: OrderIntent) -> Order | None:
         """Error path: broker state decides whether resubmitting is safe."""
@@ -105,3 +109,6 @@ class OrderManager:
                                 status=order.status.value)
         self.audit.event(f"order_{order.status.value}", symbol=order.symbol,
                          side=order.side.value, order_id=order.client_order_id)
+        if self.alerts is not None and order.status in (OrderStatus.REJECTED, OrderStatus.EXPIRED):
+            self.alerts.send("WARN", "order",
+                             f"{order.status.value} {order.side.value} {order.symbol}")
