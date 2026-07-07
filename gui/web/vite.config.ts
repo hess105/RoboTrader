@@ -8,7 +8,7 @@ const apiRoutes = [
   '/status', '/account', '/positions', '/orders', '/risk', '/logs',
   '/backtests', '/strategy', '/halt', '/killswitch', '/keys',
   '/equity', '/gate2', '/config', '/alerts', '/sweeps',
-  '/processes', '/system',
+  '/processes', '/system', '/reconcile', '/notes',
 ]
 
 export default defineConfig({

@@ -22,10 +22,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", default=None)
     ap.add_argument("--end", default=None)
+    ap.add_argument("--label", default=None, help="display name shown in the GUI Results table")
     args = ap.parse_args()
 
     try:
-        out = run_backtest(args.start, args.end, on_progress=print)
+        out = run_backtest(args.start, args.end, on_progress=print, label=args.label)
     except RuntimeError:
         raise SystemExit(
             "No paper API credentials found.\n"

@@ -13,6 +13,7 @@ import asyncio
 import csv
 import json
 import math
+import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -69,6 +70,7 @@ class KeysBody(BaseModel):
 class RunBacktestBody(BaseModel):
     start: str | None = None
     end: str | None = None
+    label: str | None = None
 
 
 class RunSweepBody(BaseModel):
@@ -77,6 +79,16 @@ class RunSweepBody(BaseModel):
     is_end: str = "2021-12-31"
     oos_start: str = "2022-01-01"
     seed: int = 0
+    label: str | None = None
+
+
+def _safe_subdir(base: Path, name: str) -> Path:
+    """Resolves name under base and refuses path traversal — shared by every
+    GET/DELETE that takes a run_id straight from the URL."""
+    d = base / name
+    if not d.is_dir() or d.parent != base:
+        raise HTTPException(404, "unknown run")
+    return d
 
 
 def create_app(engine) -> FastAPI:
@@ -157,14 +169,16 @@ def create_app(engine) -> FastAPI:
         for d in sorted(BACKTESTS_DIR.iterdir(), reverse=True):
             metrics = d / "metrics.json"
             if metrics.exists():
-                out.append({"run_id": d.name, **json.loads(metrics.read_text())})
+                row = {"run_id": d.name, **json.loads(metrics.read_text())}
+                meta = d / "meta.json"
+                if meta.exists():
+                    row["label"] = json.loads(meta.read_text()).get("label")
+                out.append(row)
         return out
 
     @app.get("/backtests/{run_id}")
     def backtest_detail(run_id: str):
-        d = BACKTESTS_DIR / run_id
-        if not d.is_dir() or d.parent != BACKTESTS_DIR:      # no traversal
-            raise HTTPException(404, "unknown run")
+        d = _safe_subdir(BACKTESTS_DIR, run_id)
         detail = {"run_id": run_id,
                   "metrics": json.loads((d / "metrics.json").read_text())}
         with open(d / "equity.csv") as fh:
@@ -177,7 +191,20 @@ def create_app(engine) -> FastAPI:
         gate1_path = d / "gate1.json"
         if gate1_path.exists():
             detail.update(json.loads(gate1_path.read_text()))    # gate1, stress
+        meta_path = d / "meta.json"
+        if meta_path.exists():
+            detail["label"] = json.loads(meta_path.read_text()).get("label")
         return detail
+
+    @app.delete("/backtests/{run_id}")
+    def backtest_delete(run_id: str):
+        # The directory is only written once, atomically, at the very end
+        # of a run (result.save() + gate1.json), so there's no in-progress
+        # run to protect against here — a run_id that's still computing
+        # simply doesn't have a directory yet, and _safe_subdir 404s on it.
+        d = _safe_subdir(BACKTESTS_DIR, run_id)
+        shutil.rmtree(d)
+        return {"deleted": run_id}
 
     @app.post("/backtests/run")
     def backtests_run(body: RunBacktestBody = RunBacktestBody()):
@@ -192,7 +219,7 @@ def create_app(engine) -> FastAPI:
         if sweep_runner.is_running():
             raise HTTPException(409, "A sweep is already running.")
         try:
-            backtest_runner.start(body.start, body.end)
+            backtest_runner.start(body.start, body.end, body.label)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc))
         return {"started": True}
@@ -215,7 +242,8 @@ def create_app(engine) -> FastAPI:
             f = d / "results.json"
             if f.exists():
                 data = json.loads(f.read_text())
-                out.append({"run_id": d.name, "eligible": data.get("eligible"),
+                out.append({"run_id": d.name, "label": data.get("label"),
+                            "eligible": data.get("eligible"),
                             "n_samples": data.get("n_samples"),
                             "full_grid_size": data.get("full_grid_size"),
                             "profitable_folds": data.get("profitable_folds"),
@@ -224,10 +252,14 @@ def create_app(engine) -> FastAPI:
 
     @app.get("/sweeps/{run_id}")
     def sweep_detail(run_id: str):
-        d = SWEEPS_DIR / run_id
-        if not d.is_dir() or d.parent != SWEEPS_DIR:      # no traversal
-            raise HTTPException(404, "unknown run")
+        d = _safe_subdir(SWEEPS_DIR, run_id)
         return json.loads((d / "results.json").read_text())
+
+    @app.delete("/sweeps/{run_id}")
+    def sweep_delete(run_id: str):
+        d = _safe_subdir(SWEEPS_DIR, run_id)
+        shutil.rmtree(d)
+        return {"deleted": run_id}
 
     @app.post("/sweeps/run")
     def sweeps_run(body: RunSweepBody = RunSweepBody()):
@@ -241,7 +273,7 @@ def create_app(engine) -> FastAPI:
             raise HTTPException(409, "A backtest is already running.")
         try:
             sweep_runner.start(body.n_samples, body.workers, body.is_end,
-                                body.oos_start, body.seed)
+                                body.oos_start, body.seed, body.label)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc))
         return {"started": True}
@@ -298,6 +330,26 @@ def create_app(engine) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         return {"halt": engine.risk.halt}
+
+    @app.post("/reconcile/run")
+    def reconcile_run():
+        # Manual on-demand version of the same reconcile_job() that already
+        # runs at startup/09:00/reconnect — a safe operator control: it only
+        # compares journal vs broker state and (on mismatch) engages the
+        # existing RECONCILE halt, the same as the automatic path. It does
+        # not size, place, or approve anything, so it doesn't cross into
+        # risk-manager territory.
+        report = engine.reconcile_job()
+        return {"clean": report.clean, "mismatches": report.mismatches, "halt": engine.risk.halt}
+
+    @app.post("/notes")
+    def add_note(body: Note):
+        # Free-text operator journal entry — folds into the same audited
+        # trail as every other decision (README Rule 10), but carries no
+        # authority of its own: it can't pause anything, resize anything,
+        # or clear a halt. Pure record-keeping.
+        engine.audit.event("operator_note", detail=body.note)
+        return {"logged": True}
 
     @app.post("/killswitch")
     def killswitch(body: KillBody):

@@ -62,6 +62,7 @@ const TABS = [
   ['Config', 'model & risk parameters'],
   ['Results', 'backtest reports'],
   ['Sweep', 'parameter search'],
+  ['Journal', 'what happened, at a glance'],
   ['Logs', 'audit trail'],
   ['Processes', 'engine + jobs'],
   ['Settings', 'keys & alerts'],
@@ -114,11 +115,11 @@ export default function App() {
         {tab === 'Config' && <Config />}
         {tab === 'Results' && <Results />}
         {tab === 'Sweep' && <Sweep />}
+        {tab === 'Journal' && <Journal />}
         {tab === 'Logs' && <Logs />}
         {tab === 'Processes' && <Processes />}
         {tab === 'Settings' && <Settings mode={mode} confirmAction={confirmAction} />}
       </main>
-      <KillSwitch />
     </>
   )
 }
@@ -382,8 +383,31 @@ function Dashboard({ status, confirmAction }: {
   }
   const totalMv = Object.values(buckets).reduce((a, b) => a + b, 0)
 
+  const [reconciling, setReconciling] = useState(false)
+  const [reconcileResult, setReconcileResult] = useState<any | null>(null)
+  const runReconcile = () => {
+    setReconciling(true)
+    post('/reconcile/run')
+      .then(setReconcileResult)
+      .catch((e) => alert(e.message))
+      .finally(() => setReconciling(false))
+  }
+
+  const [note, setNote] = useState('')
+  const [noteSent, setNoteSent] = useState(false)
+  const submitNote = () => {
+    if (!note.trim()) return
+    post('/notes', { note }).then(() => {
+      setNote('')
+      setNoteSent(true)
+      setTimeout(() => setNoteSent(false), 2000)
+    }).catch((e) => alert(e.message))
+  }
+
   return (
     <>
+      <KillSwitch />
+
       <div className="grid">
         <div className="card"><h3>Equity</h3><div className="big">{fmt$(status?.equity)}</div></div>
         <div className="card">
@@ -463,6 +487,31 @@ function Dashboard({ status, confirmAction }: {
           {Object.keys(status?.strategy.params ?? {}).length
             ? `Composite of ${Object.keys(status!.strategy.params).join(' + ')} — full parameters in the Config tab.`
             : 'No active sleeves.'}
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Operator Controls<small>safe, bounded actions — no sizing or order authority</small></h3>
+        <div className="row">
+          <button className="btn" disabled={reconciling} onClick={runReconcile}>
+            {reconciling ? 'Reconciling…' : 'Force Reconcile Now'}
+          </button>
+          {reconcileResult && (
+            <span className={reconcileResult.clean ? 'pos' : 'neg'}>
+              {reconcileResult.clean ? 'Clean — journal matches broker.'
+                : `${reconcileResult.mismatches.length} mismatch(es) — halt: ${reconcileResult.halt}`}
+            </span>
+          )}
+        </div>
+        <div className="muted" style={{ marginBottom: 8 }}>
+          Same check that already runs at startup and 09:00 ET — this just triggers it on demand.
+        </div>
+        <div className="row">
+          <input className="grow" placeholder="Add an operator note (journaled, not actionable)"
+                 value={note} onChange={(e) => setNote(e.target.value)}
+                 onKeyDown={(e) => e.key === 'Enter' && submitNote()} />
+          <button className="btn" onClick={submitNote}>Log Note</button>
+          {noteSent && <span className="pos">Logged.</span>}
         </div>
       </div>
     </>
@@ -680,6 +729,7 @@ type SortKey = 'entry_ts' | 'pnl' | 'bars_held'
 function RunBacktestPanel({ onDone }: { onDone: (runId: string) => void }) {
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
+  const [label, setLabel] = useState('')
   const [job, setJob] = useState<any | null>(null)
   const seenRunId = useRef<string | null>(null)
 
@@ -700,8 +750,8 @@ function RunBacktestPanel({ onDone }: { onDone: (runId: string) => void }) {
   }, [job?.status, onDone])
 
   const run = () => {
-    post('/backtests/run', { start: start || null, end: end || null })
-      .then(() => setJob({ status: 'running', message: 'starting…' }))
+    post('/backtests/run', { start: start || null, end: end || null, label: label.trim() || null })
+      .then(() => { setJob({ status: 'running', message: 'starting…' }); setLabel('') })
       .catch((e) => alert(e.message))
   }
   const stop = () => {
@@ -718,6 +768,8 @@ function RunBacktestPanel({ onDone }: { onDone: (runId: string) => void }) {
                title="start date (default: config/base.yaml backtest.start)" />
         <input type="date" value={end} onChange={(e) => setEnd(e.target.value)}
                title="end date (default: today)" />
+        <input className="grow" placeholder="Name this run (optional)" value={label}
+               onChange={(e) => setLabel(e.target.value)} />
         <button className="btn" disabled={running} onClick={run}>
           {running ? 'Running…' : 'Run Backtest'}
         </button>
@@ -740,6 +792,19 @@ function Results() {
   const [reasonFilter, setReasonFilter] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('entry_ts')
   const [sortDir, setSortDir] = useState<1 | -1>(-1)   // -1 = newest/largest first
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set())
+
+  const deleteRun = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirm(`Delete backtest run "${id}"? This frees disk space and cannot be undone.`)) return
+    j('/backtests/' + id, { method: 'DELETE' })
+      .then(() => {
+        setDeletedIds((s) => new Set(s).add(id))
+        setDetail((d: any) => (d?.run_id === id ? null : d))
+      })
+      .catch((e) => alert(e.message))
+  }
+  const visibleRuns = (runs ?? []).filter((r) => !deletedIds.has(r.run_id))
 
   const openRun = (id: string) => {
     setSymbolFilter('')
@@ -779,22 +844,28 @@ function Results() {
         <table>
           <thead>
             <tr><th>Run</th><th>Trades</th><th>Sharpe</th><th>PF</th><th>Max DD</th>
-                <th>Return</th><th>Halts</th></tr>
+                <th>Return</th><th>Halts</th><th></th></tr>
           </thead>
           <tbody>
-            {(runs ?? []).map((r) => (
+            {visibleRuns.map((r) => (
               <tr key={r.run_id} className="clickable" onClick={() => openRun(r.run_id)}>
-                <td>{r.run_id}</td>
+                <td>
+                  {r.label ? <><b>{r.label}</b><div className="muted">{r.run_id}</div></> : r.run_id}
+                </td>
                 <td>{r.trades}</td>
                 <td>{r.sharpe ?? ''}</td>
                 <td>{fmtPF(r.profit_factor)}</td>
                 <td>{r.max_drawdown_pct ?? ''}%</td>
                 <td>{r.total_return_pct ?? ''}%</td>
                 <td>{r.drawdown_halts ?? ''}</td>
+                <td>
+                  <button className="btn" style={{ borderColor: 'var(--bad)', color: 'var(--bad)', padding: '4px 10px' }}
+                          onClick={(e) => deleteRun(r.run_id, e)}>Delete</button>
+                </td>
               </tr>
             ))}
-            {(runs ?? []).length === 0 && (
-              <tr><td colSpan={7} className="muted">No reports — run `make backtest`.</td></tr>
+            {visibleRuns.length === 0 && (
+              <tr><td colSpan={8} className="muted">No reports — run `make backtest`.</td></tr>
             )}
           </tbody>
         </table>
@@ -803,7 +874,7 @@ function Results() {
       {detail && (
         <>
           <div className="card">
-            <h3>{detail.run_id}<small>gate-qualifying run metrics</small></h3>
+            <h3>{detail.label || detail.run_id}<small>{detail.label ? detail.run_id + ' — ' : ''}gate-qualifying run metrics</small></h3>
             <div className="stats">
               <Stat label="Trades" value={detail.metrics.trades} />
               <Stat label="Sharpe" value={detail.metrics.sharpe} />
@@ -917,6 +988,7 @@ function RunSweepPanel({ onDone }: { onDone: (runId: string) => void }) {
   const [workers, setWorkers] = useState('4')
   const [isEnd, setIsEnd] = useState('2021-12-31')
   const [oosStart, setOosStart] = useState('2022-01-01')
+  const [label, setLabel] = useState('')
   const [job, setJob] = useState<any | null>(null)
   const seenRunId = useRef<string | null>(null)
 
@@ -939,8 +1011,8 @@ function RunSweepPanel({ onDone }: { onDone: (runId: string) => void }) {
   const run = () => {
     post('/sweeps/run', {
       n_samples: +nSamples || 250, workers: +workers || 4,
-      is_end: isEnd, oos_start: oosStart,
-    }).then(() => setJob({ status: 'running', message: 'starting…' }))
+      is_end: isEnd, oos_start: oosStart, label: label.trim() || null,
+    }).then(() => { setJob({ status: 'running', message: 'starting…' }); setLabel('') })
       .catch((e) => alert(e.message))
   }
   const stop = () => {
@@ -961,6 +1033,8 @@ function RunSweepPanel({ onDone }: { onDone: (runId: string) => void }) {
                title="in-sample end date" />
         <input type="date" value={oosStart} onChange={(e) => setOosStart(e.target.value)}
                title="out-of-sample start date" />
+        <input className="grow" placeholder="Name this sweep (optional)" value={label}
+               onChange={(e) => setLabel(e.target.value)} />
         <button className="btn" disabled={running} onClick={run}>
           {running ? 'Running…' : 'Run Sweep'}
         </button>
@@ -985,10 +1059,23 @@ function RunSweepPanel({ onDone }: { onDone: (runId: string) => void }) {
 function Sweep() {
   const runs = usePoll(useCallback(() => j<any[]>('/sweeps'), []), 10000)
   const [detail, setDetail] = useState<any | null>(null)
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set())
 
   const openRun = useCallback((id: string) => {
     j('/sweeps/' + id).then(setDetail).catch((e) => alert(e.message))
   }, [])
+
+  const deleteRun = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirm(`Delete sweep run "${id}"? This frees disk space and cannot be undone.`)) return
+    j('/sweeps/' + id, { method: 'DELETE' })
+      .then(() => {
+        setDeletedIds((s) => new Set(s).add(id))
+        setDetail((d: any) => (d?.run_id === id ? null : d))
+      })
+      .catch((e) => alert(e.message))
+  }
+  const visibleRuns = (runs ?? []).filter((r) => !deletedIds.has(r.run_id))
 
   return (
     <>
@@ -999,20 +1086,26 @@ function Sweep() {
         <table>
           <thead>
             <tr><th>Run</th><th>Sampled</th><th>Full grid</th><th>Eligible</th>
-                <th>Profitable folds</th></tr>
+                <th>Profitable folds</th><th></th></tr>
           </thead>
           <tbody>
-            {(runs ?? []).map((r) => (
+            {visibleRuns.map((r) => (
               <tr key={r.run_id} className="clickable" onClick={() => openRun(r.run_id)}>
-                <td>{r.run_id}</td>
+                <td>
+                  {r.label ? <><b>{r.label}</b><div className="muted">{r.run_id}</div></> : r.run_id}
+                </td>
                 <td>{r.n_samples}</td>
                 <td>{r.full_grid_size}</td>
                 <td className={r.eligible ? 'pos' : 'neg'}>{r.eligible ? 'yes' : 'no'}</td>
                 <td>{r.profitable_folds ?? '—'}</td>
+                <td>
+                  <button className="btn" style={{ borderColor: 'var(--bad)', color: 'var(--bad)', padding: '4px 10px' }}
+                          onClick={(e) => deleteRun(r.run_id, e)}>Delete</button>
+                </td>
               </tr>
             ))}
-            {(runs ?? []).length === 0 && (
-              <tr><td colSpan={5} className="muted">No sweeps yet — run one above.</td></tr>
+            {visibleRuns.length === 0 && (
+              <tr><td colSpan={6} className="muted">No sweeps yet — run one above.</td></tr>
             )}
           </tbody>
         </table>
@@ -1020,7 +1113,7 @@ function Sweep() {
 
       {detail && detail.eligible === false && (
         <div className="card">
-          <h3>{detail.run_id}</h3>
+          <h3>{detail.label || detail.run_id}</h3>
           <div className="muted">
             No sampled combo survived 2x cost stress with enough trades in-sample.
             Widen n-samples, or this region of the space isn't promising.
@@ -1038,7 +1131,7 @@ function Sweep() {
           )}
 
           <div className="card">
-            <h3>{detail.run_id}<small>top {detail.is_top.length} in-sample — Sharpe vs Max Drawdown</small></h3>
+            <h3>{detail.label || detail.run_id}<small>top {detail.is_top.length} in-sample — Sharpe vs Max Drawdown</small></h3>
             <ScatterChart
               points={detail.is_top.map((r: any, i: number) => ({
                 x: r.maxdd, y: r.sharpe, label: `#${i + 1}`,
@@ -1109,6 +1202,86 @@ function Sweep() {
   )
 }
 
+/* ------------------------------------------------------ Journal ---- */
+
+const JOURNAL_TONE: Record<string, string> = {
+  kill_switch: 'bad', halt_change: 'bad', risk_reject: 'bad', reconcile: 'warn',
+  risk_warning: 'warn', order_rejected: 'warn', fill: 'ok', risk_approve: 'ok',
+  order_queued: 'accent', engine_start: 'accent', alert_test: 'accent',
+  operator_note: '',
+}
+
+function Journal() {
+  const [rows, setRows] = useState<any[]>([])
+  const [showTicks, setShowTicks] = useState(false)
+
+  const load = useCallback(() => {
+    j<any[]>('/logs?limit=500').then(setRows).catch(() => {})
+  }, [])
+  useEffect(() => {
+    load()
+    const id = setInterval(load, 10000)
+    return () => clearInterval(id)
+  }, [load])
+
+  const filtered = showTicks ? rows : rows.filter((r) => r.kind !== 'equity_mark')
+
+  const today = new Date().toISOString().slice(0, 10)
+  const todaysByKind: Record<string, number> = {}
+  for (const r of filtered) {
+    if (!(r.ts || '').startsWith(today)) continue
+    todaysByKind[r.kind] = (todaysByKind[r.kind] ?? 0) + 1
+  }
+
+  const groups: Record<string, any[]> = {}
+  for (const r of filtered) {
+    const day = (r.ts || '').slice(0, 10) || 'unknown'
+    ;(groups[day] ??= []).push(r)
+  }
+  const days = Object.keys(groups).sort().reverse()
+
+  return (
+    <>
+      <div className="card">
+        <h3>Today at a Glance<small>{today}</small></h3>
+        {Object.keys(todaysByKind).length === 0
+          ? <div className="muted">Nothing journaled yet today.</div>
+          : (
+            <div className="chips">
+              {Object.entries(todaysByKind).map(([k, n]) => (
+                <span key={k} className="chip">{k} × {n}</span>
+              ))}
+            </div>
+          )}
+      </div>
+
+      <div className="card">
+        <h3>Journal<small>every decision, grouped by day — friendlier view of the audit trail</small></h3>
+        <label className="row" style={{ cursor: 'pointer' }}>
+          <input type="checkbox" checked={showTicks} onChange={(e) => setShowTicks(e.target.checked)} />
+          <span className="muted">Show routine equity ticks too</span>
+        </label>
+        {days.map((day) => (
+          <div key={day} style={{ marginTop: 16 }}>
+            <div className="muted" style={{ marginBottom: 8, fontWeight: 600 }}>{day}</div>
+            {groups[day].map((r) => (
+              <div key={r.id} className="journal-entry">
+                <span className={'journal-dot ' + (JOURNAL_TONE[r.kind] ?? '')} />
+                <span className="journal-time">{(r.ts || '').slice(11, 19)}</span>
+                <span className="journal-kind">{r.kind}</span>
+                <span className="journal-detail">
+                  {[r.symbol, r.reason, r.detail].filter(Boolean).join(' — ') || '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        ))}
+        {filtered.length === 0 && <div className="muted" style={{ marginTop: 10 }}>Nothing journaled yet.</div>}
+      </div>
+    </>
+  )
+}
+
 /* -------------------------------------------------------- Logs ---- */
 
 function Logs() {
@@ -1145,7 +1318,7 @@ function Logs() {
               <td>{(r.ts || '').slice(0, 19).replace('T', ' ')}</td>
               <td>{r.kind}</td>
               <td>{r.symbol ?? ''}</td>
-              <td>{[r.reason, r.detail].filter(Boolean).join(' — ')}</td>
+              <td className="wrap">{[r.reason, r.detail].filter(Boolean).join(' — ')}</td>
             </tr>
           ))}
         </tbody>
@@ -1309,9 +1482,14 @@ function KillSwitch() {
   const [reason, setReason] = useState('')
   return (
     <>
-      <button id="kill" onClick={() => { setConfirmText(''); setOpen(true) }}>
-        Kill Switch — Flatten All
-      </button>
+      <div className="card" id="kill-card">
+        <button id="kill" onClick={() => { setConfirmText(''); setOpen(true) }}>
+          Kill Switch — Flatten All
+        </button>
+        <div className="muted" style={{ marginTop: 8 }}>
+          Cancels all open orders, market-sells every position, halts trading until a manual reset.
+        </div>
+      </div>
       {open && (
         <div className="overlay">
           <div className="modal">

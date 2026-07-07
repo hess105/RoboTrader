@@ -209,11 +209,12 @@ class TradingEngine:
         self._sync_fills()
         self._check_stops()
 
-    def reconcile_job(self) -> None:
+    def reconcile_job(self):
         report = self.recon.run()
         if not report.clean:
             self.risk.engage(HaltState.RECONCILE, "; ".join(report.mismatches))
         self.portfolio.bought_today.clear()
+        return report
 
     def daily_summary(self) -> None:
         r = self.risk.last or {}

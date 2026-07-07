@@ -126,6 +126,7 @@ def run_sweep(
     seed: int = 0,
     on_progress: Callable[[str], None] | None = None,
     cancel_flag: Callable[[], bool] | None = None,
+    label: str | None = None,
 ) -> dict:
     """Runs the joint sweep, writes journal/sweeps/<run_id>/results.json, and
     returns that same structured dict (plus "run_id").
@@ -173,7 +174,7 @@ def run_sweep(
     result: dict = {
         "full_grid_size": full_size, "n_samples": n, "is_end": is_end,
         "oos_start": oos_start, "seed": seed, "workers": workers,
-        "is_top": is_rows[:10],
+        "label": label, "is_top": is_rows[:10],
     }
 
     eligible = [r for r in is_rows if r["ok2x"] and r["trades"] >= 150]

@@ -28,7 +28,7 @@ class SweepJobRunner:
         return dict(self._state)
 
     def start(self, n_samples: int, workers: int, is_end: str,
-              oos_start: str, seed: int) -> None:
+              oos_start: str, seed: int, label: str | None = None) -> None:
         with self._lock:
             if self.is_running():
                 raise RuntimeError("A sweep is already running")
@@ -42,7 +42,8 @@ class SweepJobRunner:
         def worker() -> None:
             try:
                 out = run_sweep(n_samples, workers, is_end, oos_start, seed,
-                                 on_progress=progress, cancel_flag=self._cancel.is_set)
+                                 on_progress=progress, cancel_flag=self._cancel.is_set,
+                                 label=label)
                 self._state = {"status": "done", **out}
             except SweepCancelled:
                 self._state = {"status": "stopped"}

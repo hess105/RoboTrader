@@ -18,7 +18,7 @@ import time
 from backtest.runner import run_backtest
 
 
-def _subprocess_entry(start, end, result_q, progress_q) -> None:
+def _subprocess_entry(start, end, label, result_q, progress_q) -> None:
     def progress(msg: str) -> None:
         try:
             progress_q.put_nowait(msg)
@@ -26,7 +26,7 @@ def _subprocess_entry(start, end, result_q, progress_q) -> None:
             pass
 
     try:
-        out = run_backtest(start, end, on_progress=progress)
+        out = run_backtest(start, end, on_progress=progress, label=label)
         result_q.put(("done", out))
     except RuntimeError as exc:
         result_q.put(("error", str(exc)))
@@ -46,7 +46,7 @@ class BacktestJobRunner:
     def status(self) -> dict:
         return dict(self._state)
 
-    def start(self, start: str | None, end: str | None) -> None:
+    def start(self, start: str | None, end: str | None, label: str | None = None) -> None:
         with self._lock:
             if self.is_running():
                 raise RuntimeError("A backtest is already running")
@@ -57,7 +57,7 @@ class BacktestJobRunner:
         result_q: mp.Queue = ctx.Queue()
         progress_q: mp.Queue = ctx.Queue()
         proc = ctx.Process(target=_subprocess_entry,
-                            args=(start, end, result_q, progress_q), daemon=True)
+                            args=(start, end, label, result_q, progress_q), daemon=True)
         self._process = proc
         proc.start()
 

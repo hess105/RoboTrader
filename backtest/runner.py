@@ -26,10 +26,16 @@ def run_backtest(
     start: str | None = None,
     end: str | None = None,
     on_progress: Callable[[str], None] | None = None,
+    label: str | None = None,
 ) -> dict:
     """Fetches data, runs the backtest, writes journal/backtests/<run_id>/
-    (equity, trades, metrics, and a gate1.json quick-check summary), and
-    returns {"run_id", "metrics", "gate1", "stress"}.
+    (equity, trades, metrics, a gate1.json quick-check summary, and — if
+    given — a meta.json holding the operator's display label), and returns
+    {"run_id", "label", "metrics", "gate1", "stress"}.
+
+    run_id itself stays a sortable timestamp (it's the directory name and
+    must be unique); label is purely a display name layered on top, never
+    used for identity.
 
     Raises RuntimeError if paper API credentials aren't available — the
     same failure mode whether triggered from the CLI or the GUI.
@@ -72,5 +78,7 @@ def run_backtest(
         {"label": "survives 2x costs", "ok": stress["profitable"]},
     ]
     Path(out_dir, "gate1.json").write_text(json.dumps({"gate1": gate1, "stress": stress}, indent=2, default=str))
+    if label:
+        Path(out_dir, "meta.json").write_text(json.dumps({"label": label}))
 
-    return {"run_id": run_id, "metrics": m, "gate1": gate1, "stress": stress}
+    return {"run_id": run_id, "label": label, "metrics": m, "gate1": gate1, "stress": stress}

@@ -42,6 +42,7 @@ def main() -> None:
     ap.add_argument("--n-samples", type=int, default=250)
     ap.add_argument("--workers", type=int, default=5)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--label", default=None, help="display name shown in the GUI Sweep table")
     args = ap.parse_args()
 
     print("=" * 70)
@@ -52,7 +53,7 @@ def main() -> None:
 
     try:
         out = run_sweep(args.n_samples, args.workers, args.is_end,
-                         args.oos_start, args.seed, on_progress=print)
+                         args.oos_start, args.seed, on_progress=print, label=args.label)
     except RuntimeError:
         raise SystemExit(
             "No paper API credentials found.\n"
