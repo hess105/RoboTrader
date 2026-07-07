@@ -139,12 +139,21 @@ class TradingEngine:
         asof = max(df.index.max() for df in frames.values())
         self.refresh_portfolio()
         view = HistoryView(frames, asof, self.strategy.warmup_bars())
+        self._evaluate_and_queue(view, asof)
+
+    def _evaluate_and_queue(self, view: HistoryView, asof) -> int:
+        """Signal evaluation + risk gate + queueing, factored out of
+        compute_signals() so a historical `asof` (multi-day simulation) can
+        drive the exact same logic a live 16:15 run does. Prices off
+        `view.history()`, which is clock-gated to `asof` — never the
+        untrimmed frame's latest row, so this is safe to call with a
+        historical asof without leaking future prices."""
         signals = self.strategy.on_daily_close(view, dict(self.portfolio.positions))
         queued = 0
         for sig in ([s for s in signals if s.side is Side.SELL]
                     + [s for s in signals if s.side is Side.BUY]):
-            df = frames.get(sig.symbol)
-            if df is None:
+            df = view.history(sig.symbol)
+            if df.empty:
                 continue
             price = float(df["close"].iloc[-1])
             spread_pct = self._spread_pct(sig.symbol)
@@ -167,6 +176,7 @@ class TradingEngine:
                                      reason=sig.strategy)
             queued += 1
         self.audit.event("signals_run", detail=f"asof={asof.date()} queued={queued}")
+        return queued
 
     def submit_queued(self) -> None:
         """09:35 ET: submit yesterday's queued intents. Entries re-check the
@@ -261,12 +271,24 @@ class TradingEngine:
         pf.gross_exposure = max(pf.equity - pf.settled_cash, 0.0)
 
     def _check_stops(self) -> None:
+        self._check_stops_at(lambda sym: self._quote_or_none(sym))
+
+    def _quote_or_none(self, sym: str) -> float | None:
+        try:
+            bid, _ask = self.data.latest_quote(sym)
+            return bid
+        except Exception:                            # noqa: BLE001 — next tick retries
+            return None
+
+    def _check_stops_at(self, price_lookup) -> None:
+        """Stop-check factored so a historical price source (multi-day
+        simulation, keyed off that day's bar) can drive the same protective-
+        stop logic live trading uses. `price_lookup(symbol) -> float | None`."""
         for sym, pos in list(self.portfolio.positions.items()):
             if pos.stop_price is None:
                 continue
-            try:
-                bid, _ask = self.data.latest_quote(sym)
-            except Exception:                        # noqa: BLE001 — next tick retries
+            bid = price_lookup(sym)
+            if bid is None:
                 continue
             if bid and bid <= float(pos.stop_price):
                 sig = Signal(self.strategy.name, sym, Side.SELL,

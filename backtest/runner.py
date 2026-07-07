@@ -27,6 +27,7 @@ def run_backtest(
     end: str | None = None,
     on_progress: Callable[[str], None] | None = None,
     label: str | None = None,
+    capital: float | None = None,
 ) -> dict:
     """Fetches data, runs the backtest, writes journal/backtests/<run_id>/
     (equity, trades, metrics, a gate1.json quick-check summary, and — if
@@ -35,7 +36,9 @@ def run_backtest(
 
     run_id itself stays a sortable timestamp (it's the directory name and
     must be unique); label is purely a display name layered on top, never
-    used for identity.
+    used for identity. `capital` overrides config/base.yaml's
+    account.starting_capital for this run only — useful for sizing checks
+    without editing config.
 
     Raises RuntimeError if paper API credentials aren't available — the
     same failure mode whether triggered from the CLI or the GUI.
@@ -46,6 +49,8 @@ def run_backtest(
 
     settings = load_settings()          # base config; backtests never touch live
     cfg = settings.raw
+    if capital is not None:
+        cfg["account"] = {**cfg["account"], "starting_capital": float(capital)}
     creds = broker_creds(Mode.PAPER)    # raises RuntimeError if missing
 
     start = start or cfg["backtest"]["start"]

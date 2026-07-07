@@ -644,6 +644,7 @@ function RunBacktestPanel({ onDone }: { onDone: (runId: string) => void }) {
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [label, setLabel] = useState('')
+  const [capital, setCapital] = useState('')
   const [job, setJob] = useState<any | null>(null)
   const seenRunId = useRef<string | null>(null)
 
@@ -664,7 +665,10 @@ function RunBacktestPanel({ onDone }: { onDone: (runId: string) => void }) {
   }, [job?.status, onDone])
 
   const run = () => {
-    post('/backtests/run', { start: start || null, end: end || null, label: label.trim() || null })
+    post('/backtests/run', {
+      start: start || null, end: end || null, label: label.trim() || null,
+      capital: capital ? +capital : null,
+    })
       .then(() => { setJob({ status: 'running', message: 'starting…' }); setLabel('') })
       .catch((e) => alert(e.message))
   }
@@ -682,6 +686,8 @@ function RunBacktestPanel({ onDone }: { onDone: (runId: string) => void }) {
                title="start date (default: config/base.yaml backtest.start)" />
         <input type="date" value={end} onChange={(e) => setEnd(e.target.value)}
                title="end date (default: today)" />
+        <input style={{ width: 130 }} value={capital} onChange={(e) => setCapital(e.target.value)}
+               placeholder="Capital ($500)" title="starting capital override (default: config/base.yaml account.starting_capital)" />
         <input className="grow" placeholder="Name this run (optional)" value={label}
                onChange={(e) => setLabel(e.target.value)} />
         <button className="btn" disabled={running} onClick={run}>
@@ -897,56 +903,134 @@ function Results() {
 
 /* --------------------------------------------------- Simulate ---- */
 
-function Simulate() {
+function RunSimulatePanel({ onDone }: { onDone: (runId: string) => void }) {
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
   const [job, setJob] = useState<any | null>(null)
+  const seenRunId = useRef<string | null>(null)
 
   useEffect(() => {
     if (job?.status !== 'running') return
     let alive = true
     const id = setInterval(() => {
-      j<any>('/simulate/run/status').then((s) => { if (alive) setJob(s) }).catch(() => {})
+      j<any>('/simulate/run/status').then((s) => {
+        if (!alive) return
+        setJob(s)
+        if (s.status === 'done' && s.run_id !== seenRunId.current) {
+          seenRunId.current = s.run_id
+          onDone(s.run_id)
+        }
+      }).catch(() => {})
     }, 2000)
     return () => { alive = false; clearInterval(id) }
-  }, [job?.status])
+  }, [job?.status, onDone])
 
   const run = () => {
-    post('/simulate/run')
+    post('/simulate/run', { start: start || null, end: end || null })
       .then(() => setJob({ status: 'running', message: 'starting…' }))
       .catch((e) => alert(e.message))
   }
   const stop = () => { post('/simulate/run/stop').catch((e) => alert(e.message)) }
   const running = job?.status === 'running'
-  const orders: any[] = job?.status === 'done' ? job.orders ?? [] : []
-  const events: any[] = job?.status === 'done' ? job.events ?? [] : []
+
+  return (
+    <div className="card">
+      <h3>Simulate Trading Days<small>
+        walk-forward dry-run through real strategy/risk code, one or more days —
+        against a paper config with a fake broker, never the real broker or journal
+      </small></h3>
+      <div className="row">
+        <input type="date" value={start} onChange={(e) => setStart(e.target.value)}
+               title="start date (default: today — single-day simulation)" />
+        <input type="date" value={end} onChange={(e) => setEnd(e.target.value)}
+               title="end date (default: today, or the start date if given)" />
+        <button className="btn" disabled={running} onClick={run}>
+          {running ? 'Running…' : 'Run Simulation'}
+        </button>
+        {running && (
+          <button className="btn" style={{ borderColor: 'var(--bad)', color: 'var(--bad)' }}
+                  onClick={stop}>Stop</button>
+        )}
+        {running && <span className="muted">{job.message}</span>}
+        {job?.status === 'stopped' && <span className="muted">Stopped.</span>}
+        {job?.status === 'error' && <span className="neg">{job.error}</span>}
+      </div>
+      <p className="muted">
+        Positions/equity/halt state carry forward day to day, seeded once from
+        your real paper account. Notifications arrive on your real Telegram/email
+        channel, prefixed <b>[SIMULATION &lt;date&gt;]</b> so they're never confused
+        with real trading alerts — one push per simulated day, so a long range
+        means many notifications. Results are saved below; nothing here touches
+        the real broker or the real Blotter/Journal.
+      </p>
+    </div>
+  )
+}
+
+function Simulate() {
+  const runs = usePoll(useCallback(() => j<any[]>('/simulate'), []), 10000)
+  const [detail, setDetail] = useState<any | null>(null)
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set())
+
+  const openRun = useCallback((id: string) => {
+    j('/simulate/' + id).then(setDetail).catch((e) => alert(e.message))
+  }, [])
+
+  const deleteRun = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirm(`Delete simulation run "${id}"? This frees disk space and cannot be undone.`)) return
+    j('/simulate/' + id, { method: 'DELETE' })
+      .then(() => {
+        setDeletedIds((s) => new Set(s).add(id))
+        setDetail((d: any) => (d?.run_id === id ? null : d))
+      })
+      .catch((e) => alert(e.message))
+  }
+  const visibleRuns = (runs ?? []).filter((r) => !deletedIds.has(r.run_id))
+
+  const orders: any[] = detail?.orders ?? []
+  const events: any[] = detail?.events ?? []
+  const log: any[] = detail?.log ?? []
+  const equity: [string, number][] = detail?.equity ?? []
 
   return (
     <>
+      <RunSimulatePanel onDone={openRun} />
+
       <div className="card">
-        <h3>Simulate a Trading Day<small>
-          dry-run of signals → order requests → fills → alerts, against a paper
-          config with a fake broker — never touches the real broker or journal
-        </small></h3>
-        <div className="row">
-          <button className="btn" disabled={running} onClick={run}>
-            {running ? 'Running…' : 'Run Simulated Day'}
-          </button>
-          {running && (
-            <button className="btn" style={{ borderColor: 'var(--bad)', color: 'var(--bad)' }}
-                    onClick={stop}>Stop</button>
-          )}
-          {running && <span className="muted">{job.message}</span>}
-          {job?.status === 'stopped' && <span className="muted">Stopped.</span>}
-          {job?.status === 'error' && <span className="neg">{job.error}</span>}
-        </div>
-        <p className="muted">
-          Notifications from this run arrive on your real Telegram/email channel,
-          prefixed <b>[SIMULATION]</b> so they're never confused with real trading
-          alerts. Simulated orders live only in an in-memory audit log for this
-          run — they never appear in the real Blotter/Journal.
-        </p>
+        <h3>Simulation Runs<small>click a run to open</small></h3>
+        <table>
+          <thead>
+            <tr><th>Run</th><th>Start</th><th>End</th><th>Days</th><th></th></tr>
+          </thead>
+          <tbody>
+            {visibleRuns.map((r) => (
+              <tr key={r.run_id} className="clickable" onClick={() => openRun(r.run_id)}>
+                <td>{r.run_id}</td>
+                <td>{r.start}</td>
+                <td>{r.end}</td>
+                <td>{r.days}</td>
+                <td>
+                  <button className="btn" style={{ borderColor: 'var(--bad)', color: 'var(--bad)', padding: '4px 10px' }}
+                          onClick={(e) => deleteRun(r.run_id, e)}>Delete</button>
+                </td>
+              </tr>
+            ))}
+            {visibleRuns.length === 0 && (
+              <tr><td colSpan={5} className="muted">No simulation runs yet — run one above.</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
-      {job?.status === 'done' && (
+
+      {detail && (
         <>
+          {equity.length > 1 && (
+            <div className="card">
+              <h3>{detail.run_id}<small>simulated equity, {detail.start} .. {detail.end}</small></h3>
+              <LineChart data={equity.map((e) => e[1])} />
+            </div>
+          )}
           <div className="card">
             <h3>Simulated Orders</h3>
             <OrderTable rows={orders} empty="No simulated orders." />
@@ -956,7 +1040,7 @@ function Simulate() {
             <table>
               <thead><tr><th>Time</th><th>Kind</th><th>Symbol</th><th>Detail</th></tr></thead>
               <tbody>
-                {events.map((e, i) => (
+                {events.map((e: any, i: number) => (
                   <tr key={i}>
                     <td>{(e.ts || '').slice(0, 19).replace('T', ' ')}</td>
                     <td>{e.kind}</td>
@@ -966,6 +1050,23 @@ function Simulate() {
                 ))}
                 {events.length === 0 && (
                   <tr><td colSpan={4} className="muted">No simulated events.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="card">
+            <h3>Run Log<small>timestamped, real wall-clock — the run itself replays historical days</small></h3>
+            <table>
+              <thead><tr><th>Time</th><th>Message</th></tr></thead>
+              <tbody>
+                {log.map((entry: any, i: number) => (
+                  <tr key={i}>
+                    <td className="muted">{(entry.ts || '').slice(11, 19)}</td>
+                    <td>{entry.message}</td>
+                  </tr>
+                ))}
+                {log.length === 0 && (
+                  <tr><td colSpan={2} className="muted">No log entries.</td></tr>
                 )}
               </tbody>
             </table>

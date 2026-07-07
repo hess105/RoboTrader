@@ -23,10 +23,13 @@ def main() -> None:
     ap.add_argument("--start", default=None)
     ap.add_argument("--end", default=None)
     ap.add_argument("--label", default=None, help="display name shown in the GUI Results table")
+    ap.add_argument("--capital", type=float, default=None,
+                    help="override config/base.yaml's account.starting_capital for this run")
     args = ap.parse_args()
 
     try:
-        out = run_backtest(args.start, args.end, on_progress=print, label=args.label)
+        out = run_backtest(args.start, args.end, on_progress=print, label=args.label,
+                           capital=args.capital)
     except RuntimeError:
         raise SystemExit(
             "No paper API credentials found.\n"

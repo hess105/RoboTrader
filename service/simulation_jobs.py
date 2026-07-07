@@ -12,7 +12,7 @@ import time
 from service.simulate_day import run_simulated_day
 
 
-def _subprocess_entry(result_q, progress_q) -> None:
+def _subprocess_entry(start, end, result_q, progress_q) -> None:
     def progress(msg: str) -> None:
         try:
             progress_q.put_nowait(msg)
@@ -20,8 +20,10 @@ def _subprocess_entry(result_q, progress_q) -> None:
             pass
 
     try:
-        out = run_simulated_day(on_progress=progress)
+        out = run_simulated_day(on_progress=progress, start=start, end=end)
         result_q.put(("done", out))
+    except RuntimeError as exc:
+        result_q.put(("error", str(exc)))
     except Exception as exc:                               # noqa: BLE001 — surface, never crash the engine
         result_q.put(("error", f"{type(exc).__name__}: {exc}"))
 
@@ -38,7 +40,7 @@ class SimulationJobRunner:
     def status(self) -> dict:
         return dict(self._state)
 
-    def start(self) -> None:
+    def start(self, start: str | None = None, end: str | None = None) -> None:
         with self._lock:
             if self.is_running():
                 raise RuntimeError("A simulation is already running")
@@ -48,7 +50,7 @@ class SimulationJobRunner:
         ctx = mp.get_context("spawn")
         result_q: mp.Queue = ctx.Queue()
         progress_q: mp.Queue = ctx.Queue()
-        proc = ctx.Process(target=_subprocess_entry, args=(result_q, progress_q), daemon=True)
+        proc = ctx.Process(target=_subprocess_entry, args=(start, end, result_q, progress_q), daemon=True)
         self._process = proc
         proc.start()
 

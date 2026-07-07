@@ -29,6 +29,7 @@ from service.simulation_jobs import runner as simulation_runner
 
 GUI_DIST = Path(__file__).resolve().parent.parent / "gui" / "web" / "dist"
 BACKTESTS_DIR = Path("journal/backtests")
+SIMULATIONS_DIR = Path("journal/simulations")
 
 
 def _json_safe(obj):
@@ -70,11 +71,17 @@ class RunBacktestBody(BaseModel):
     start: str | None = None
     end: str | None = None
     label: str | None = None
+    capital: float | None = None
 
 
 class AlertPrefBody(BaseModel):
     kind: str
     enabled: bool
+
+
+class RunSimulateBody(BaseModel):
+    start: str | None = None
+    end: str | None = None
 
 
 def _safe_subdir(base: Path, name: str) -> Path:
@@ -224,7 +231,7 @@ def create_app(engine) -> FastAPI:
             raise HTTPException(
                 403, "Backtests are disabled while the engine is in LIVE mode.")
         try:
-            backtest_runner.start(body.start, body.end, body.label)
+            backtest_runner.start(body.start, body.end, body.label, body.capital)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc))
         return {"started": True}
@@ -239,13 +246,13 @@ def create_app(engine) -> FastAPI:
         return {"stopped": stopped}
 
     @app.post("/simulate/run")
-    def simulate_run():
+    def simulate_run(body: RunSimulateBody = RunSimulateBody()):
         # Always runs against config/paper.yaml in a fully isolated engine
         # (fake broker writes, in-memory audit) — see service/simulate_day.py.
         # Safe regardless of the live engine's mode; refused only to avoid
         # a redundant subprocess if one is already in flight.
         try:
-            simulation_runner.start()
+            simulation_runner.start(body.start, body.end)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc))
         return {"started": True}
@@ -258,6 +265,30 @@ def create_app(engine) -> FastAPI:
     def simulate_run_stop():
         stopped = simulation_runner.stop()
         return {"stopped": stopped}
+
+    @app.get("/simulate")
+    def simulations():
+        if not SIMULATIONS_DIR.exists():
+            return []
+        out = []
+        for d in sorted(SIMULATIONS_DIR.iterdir(), reverse=True):
+            f = d / "results.json"
+            if f.exists():
+                data = json.loads(f.read_text())
+                out.append({"run_id": d.name, "start": data.get("start"),
+                            "end": data.get("end"), "days": data.get("days")})
+        return out
+
+    @app.get("/simulate/{run_id}")
+    def simulation_detail(run_id: str):
+        d = _safe_subdir(SIMULATIONS_DIR, run_id)
+        return json.loads((d / "results.json").read_text())
+
+    @app.delete("/simulate/{run_id}")
+    def simulation_delete(run_id: str):
+        d = _safe_subdir(SIMULATIONS_DIR, run_id)
+        shutil.rmtree(d)
+        return {"deleted": run_id}
 
     @app.get("/processes")
     def processes():
