@@ -565,6 +565,54 @@ function RiskPanel({ confirmAction }: { confirmAction: (t: string) => boolean })
 
 type SortKey = 'entry_ts' | 'pnl' | 'bars_held'
 
+function RunBacktestPanel({ onDone }: { onDone: (runId: string) => void }) {
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
+  const [job, setJob] = useState<any | null>(null)
+  const seenRunId = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (job?.status !== 'running') return
+    let alive = true
+    const id = setInterval(() => {
+      j<any>('/backtests/run/status').then((s) => {
+        if (!alive) return
+        setJob(s)
+        if (s.status === 'done' && s.run_id !== seenRunId.current) {
+          seenRunId.current = s.run_id
+          onDone(s.run_id)
+        }
+      }).catch(() => {})
+    }, 2000)
+    return () => { alive = false; clearInterval(id) }
+  }, [job?.status, onDone])
+
+  const run = () => {
+    post('/backtests/run', { start: start || null, end: end || null })
+      .then(() => setJob({ status: 'running', message: 'starting…' }))
+      .catch((e) => alert(e.message))
+  }
+
+  const running = job?.status === 'running'
+
+  return (
+    <div className="card">
+      <h3>Run Backtest<small>fetches data, runs strategies/composite.py, writes journal/backtests/</small></h3>
+      <div className="row">
+        <input type="date" value={start} onChange={(e) => setStart(e.target.value)}
+               title="start date (default: config/base.yaml backtest.start)" />
+        <input type="date" value={end} onChange={(e) => setEnd(e.target.value)}
+               title="end date (default: today)" />
+        <button className="btn" disabled={running} onClick={run}>
+          {running ? 'Running…' : 'Run Backtest'}
+        </button>
+        {running && <span className="muted">{job.message}</span>}
+        {job?.status === 'error' && <span className="neg">{job.error}</span>}
+      </div>
+    </div>
+  )
+}
+
 function Results() {
   const runs = usePoll(useCallback(() => j<any[]>('/backtests'), []), 10000)
   const [detail, setDetail] = useState<any | null>(null)
@@ -604,6 +652,8 @@ function Results() {
 
   return (
     <>
+      <RunBacktestPanel onDone={openRun} />
+
       <div className="card">
         <h3>Backtest Results<small>click a run to open</small></h3>
         <table>
@@ -651,6 +701,25 @@ function Results() {
               {detail.metrics.drawdown_halts != null &&
                 <Stat label="Breaker halts" value={detail.metrics.drawdown_halts} />}
             </div>
+            {detail.gate1 && (
+              <div style={{ marginTop: 14 }}>
+                <div className="muted" style={{ marginBottom: 6 }}>
+                  Gate 1 quick check<small style={{ marginLeft: 6 }}>full criteria in docs/GATES.md</small>
+                </div>
+                {detail.gate1.map((c: { label: string; ok: boolean }) => (
+                  <div key={c.label} className="check">
+                    <span>{c.label}</span>
+                    <b className={c.ok ? 'pos' : 'neg'}>{c.ok ? 'PASS' : 'FAIL'}</b>
+                  </div>
+                ))}
+                {detail.stress && (
+                  <div className="check">
+                    <span>survives 2x costs (PF)</span>
+                    <b>{detail.stress.profit_factor}</b>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="cols">

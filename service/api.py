@@ -18,6 +18,9 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from core.models import Mode
+from service.backtest_jobs import runner as backtest_runner
+
 GUI_DIST = Path(__file__).resolve().parent.parent / "gui" / "web" / "dist"
 BACKTESTS_DIR = Path("journal/backtests")
 
@@ -35,6 +38,11 @@ class KeysBody(BaseModel):
     mode: str
     key_id: str
     secret_key: str
+
+
+class RunBacktestBody(BaseModel):
+    start: str | None = None
+    end: str | None = None
 
 
 def create_app(engine) -> FastAPI:
@@ -131,7 +139,30 @@ def create_app(engine) -> FastAPI:
         if trades_path.exists():
             with open(trades_path) as fh:
                 detail["trades"] = list(csv.DictReader(fh))[-200:]
+        gate1_path = d / "gate1.json"
+        if gate1_path.exists():
+            detail.update(json.loads(gate1_path.read_text()))    # gate1, stress
         return detail
+
+    @app.post("/backtests/run")
+    def backtests_run(body: RunBacktestBody = RunBacktestBody()):
+        # Heavy, synchronous CPU work (data fetch + the backtest loop) run in
+        # a background thread — see service/backtest_jobs.py. Refused in LIVE
+        # mode: that GIL contention competing with the live tick loop is
+        # exactly the kind of downtime risk this project treats as unsafe
+        # (protective stops are engine-monitored, not broker-resting).
+        if engine.settings.mode is Mode.LIVE:
+            raise HTTPException(
+                403, "Backtests are disabled while the engine is in LIVE mode.")
+        try:
+            backtest_runner.start(body.start, body.end)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc))
+        return {"started": True}
+
+    @app.get("/backtests/run/status")
+    def backtests_run_status():
+        return backtest_runner.status()
 
     # --------------------------------------------------------- command side
 
