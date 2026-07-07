@@ -87,17 +87,49 @@ Each file holds exactly one value, no quotes, no trailing newline needed
 
 `docker-compose.yml` only publishes the API/GUI on the **droplet's own**
 `127.0.0.1:8765` (`ports: ["127.0.0.1:8765:8765"]`) — it is never reachable
-from the public internet, ufw or not. Install Tailscale on the droplet and
-your phone/laptop (the installer offers to do this for you):
+from the public internet, ufw or not. This is deliberate and stays exactly
+this locked-down; do NOT change it to `0.0.0.0:8765:8765` to "fix" remote
+access — Docker inserts its own iptables rules that can bypass ufw entirely
+for published ports, so that would likely expose the kill switch to the
+whole internet, not just your tailnet.
+
+Install Tailscale on the droplet and authenticate it (the installer offers
+to do this for you):
 
 ```bash
-curl -fsSL https://tailscale.com/install.sh | sh && tailscale up
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
 ```
 
-Then either browse to `http://<tailscale-ip>:8765` (safe because Tailscale
-traffic arrives on its own interface, and the port is bound to loopback for
-everything else), or SSH-tunnel instead:
-`ssh -L 8765:127.0.0.1:8765 robotrader@<droplet-ip>`.
+Because the port is loopback-only, Tailscale can't reach it by IP directly
+(`tailscale0` is a different interface from `127.0.0.1`) — use Tailscale's
+own local reverse proxy instead, which forwards tailnet traffic to
+`127.0.0.1:8765` without publishing the port any wider:
+
+```bash
+sudo tailscale serve --bg 8765
+tailscale serve status      # confirm the mapping; persists across reboots
+```
+
+Install Tailscale on your laptop/phone too, sign into the same tailnet, and
+browse to `https://<droplet-hostname>.<your-tailnet>.ts.net` (find the exact
+URL via `tailscale status` on the droplet, or the
+[admin console](https://login.tailscale.com/admin/machines)).
+
+Two things worth checking once, since they cause silent surprises months
+later:
+
+- **Key expiry.** Tailscale nodes re-require interactive auth every ~180
+  days by default. For an unattended server, disable expiry for this
+  specific machine in the admin console (Machines → the droplet → disable
+  key expiry) — otherwise the tailnet connection (and therefore GUI access)
+  quietly drops until someone re-runs `tailscale up` interactively.
+- **`tailscaled` on boot.** The install script enables it automatically;
+  confirm with `systemctl is-enabled tailscaled` (should print `enabled`).
+
+Or skip Tailscale entirely for one-off access: SSH-tunnel instead —
+`ssh -L 8765:127.0.0.1:8765 robotrader@<droplet-ip>`, then browse to
+`http://127.0.0.1:8765` on your own machine.
 
 ## 5. Run as a service (paper)
 
