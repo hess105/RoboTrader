@@ -18,6 +18,7 @@ apscheduler>=3.10
 # Persistence / logging
 structlog>=24.1
 # sqlite3 is stdlib; audit store and cache use it
+psutil>=5.9          # GUI process viewer (PID/memory/CPU) — RoboTrader's own process only
 
 # Secrets (uses macOS Keychain locally; falls back to env vars)
 keyring>=25.0

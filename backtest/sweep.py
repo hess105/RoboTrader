@@ -88,6 +88,28 @@ def run_combo(job: tuple[dict, str | None, str | None]) -> dict:
             "ok2x": stress["profitable"]}
 
 
+class SweepCancelled(Exception):
+    pass
+
+
+def _run_pool(ctx, workers: int, bars_path: str, jobs: list, cancel_flag: Callable[[], bool] | None) -> list:
+    """pool.map() as a pollable, cancellable operation: map_async() doesn't
+    block, so a "Stop" button can terminate the pool between polls instead
+    of only being able to interrupt a blocking pool.map() call from another
+    thread (undefined/version-dependent behavior in CPython's multiprocessing)."""
+    pool = ctx.Pool(workers, initializer=_init, initargs=(bars_path,))
+    async_result = pool.map_async(run_combo, jobs)
+    while not async_result.ready():
+        if cancel_flag is not None and cancel_flag():
+            pool.terminate()
+            pool.join()
+            raise SweepCancelled()
+        async_result.wait(0.5)
+    pool.close()
+    pool.join()
+    return async_result.get()
+
+
 def fmt(r: dict) -> str:
     knobs = " ".join(f"{k}={r[k]}" for k in GRID)
     return (f"{knobs}\n      n={r['trades']:>4} sharpe={r['sharpe']:>5.2f} "
@@ -103,16 +125,19 @@ def run_sweep(
     oos_start: str = "2022-01-01",
     seed: int = 0,
     on_progress: Callable[[str], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
 ) -> dict:
     """Runs the joint sweep, writes journal/sweeps/<run_id>/results.json, and
     returns that same structured dict (plus "run_id").
 
-    Raises RuntimeError if paper API credentials aren't available. Uses an
-    explicit spawn context for every Pool — this is routinely called from a
-    background thread inside the live FastAPI/uvicorn process (see
-    service/sweep_jobs.py), and forking worker processes from a thread that
-    shares the server's event loop and open sockets is the kind of thing
-    that hangs in ways that are hard to debug; spawn always starts clean.
+    Raises RuntimeError if paper API credentials aren't available, or
+    SweepCancelled if cancel_flag() returns True while a pool is running
+    (service/sweep_jobs.py's "Stop" button). Uses an explicit spawn context
+    for every Pool — this is routinely called from a background thread
+    inside the live FastAPI/uvicorn process, and forking worker processes
+    from a thread that shares the server's event loop and open sockets is
+    the kind of thing that hangs in ways that are hard to debug; spawn
+    always starts clean.
     """
     def progress(msg: str) -> None:
         if on_progress:
@@ -142,8 +167,7 @@ def run_sweep(
     combos = [dict(zip(keys, values)) for values in rng.sample(all_combos, n)]
 
     progress(f"Running {len(combos)} in-sample combos ({workers} worker(s))")
-    with ctx.Pool(workers, initializer=_init, initargs=(bars_path,)) as pool:
-        is_rows = pool.map(run_combo, [(c, None, is_end) for c in combos])
+    is_rows = _run_pool(ctx, workers, bars_path, [(c, None, is_end) for c in combos], cancel_flag)
     is_rows.sort(key=lambda r: (r["ok2x"], r["trades"] >= 150, r["sharpe"]), reverse=True)
 
     result: dict = {
@@ -160,13 +184,12 @@ def run_sweep(
 
     progress(f"Judging top {len(top)} out-of-sample")
     jobs = [({k: r[k] for k in GRID}, oos_start, None) for r in top]
-    with ctx.Pool(min(workers, len(jobs)), initializer=_init, initargs=(bars_path,)) as pool:
-        oos_rows = pool.map(run_combo, jobs)
+    oos_rows = _run_pool(ctx, min(workers, len(jobs)), bars_path, jobs, cancel_flag)
 
     winner = {k: top[0][k] for k in GRID}
     progress("Running walk-forward folds for the winner")
-    with ctx.Pool(min(workers, len(FOLDS)), initializer=_init, initargs=(bars_path,)) as pool:
-        fold_rows = pool.map(run_combo, [(winner, a, b) for a, b in FOLDS])
+    fold_rows = _run_pool(ctx, min(workers, len(FOLDS)), bars_path,
+                           [(winner, a, b) for a, b in FOLDS], cancel_flag)
     profitable_folds = sum(1 for r in fold_rows if r["ret"] > 0)
 
     is_sharpe = top[0]["sharpe"]

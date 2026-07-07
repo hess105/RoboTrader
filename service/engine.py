@@ -358,8 +358,10 @@ class TradingEngine:
 def main(config_path: str | None = None) -> None:
     import uvicorn
 
+    from monitoring.log_buffer import install as install_log_buffer
     from service.api import create_app
 
+    install_log_buffer()          # GUI's Processes tab live-tails stdout/stderr
     settings = load_settings(config_path)
     engine = TradingEngine(settings)
     engine.startup()

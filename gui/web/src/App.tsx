@@ -58,6 +58,7 @@ const TABS = [
   ['Results', 'backtest reports'],
   ['Sweep', 'parameter search'],
   ['Logs', 'audit trail'],
+  ['Processes', 'engine + jobs'],
   ['Settings', 'keys & alerts'],
 ] as const
 type Tab = (typeof TABS)[number][0]
@@ -109,6 +110,7 @@ export default function App() {
         {tab === 'Results' && <Results />}
         {tab === 'Sweep' && <Sweep />}
         {tab === 'Logs' && <Logs />}
+        {tab === 'Processes' && <Processes />}
         {tab === 'Settings' && <Settings mode={mode} confirmAction={confirmAction} />}
       </main>
       <KillSwitch />
@@ -697,6 +699,9 @@ function RunBacktestPanel({ onDone }: { onDone: (runId: string) => void }) {
       .then(() => setJob({ status: 'running', message: 'starting…' }))
       .catch((e) => alert(e.message))
   }
+  const stop = () => {
+    post('/backtests/run/stop').catch((e) => alert(e.message))
+  }
 
   const running = job?.status === 'running'
 
@@ -711,7 +716,12 @@ function RunBacktestPanel({ onDone }: { onDone: (runId: string) => void }) {
         <button className="btn" disabled={running} onClick={run}>
           {running ? 'Running…' : 'Run Backtest'}
         </button>
+        {running && (
+          <button className="btn" style={{ borderColor: 'var(--bad)', color: 'var(--bad)' }}
+                  onClick={stop}>Stop</button>
+        )}
         {running && <span className="muted">{job.message}</span>}
+        {job?.status === 'stopped' && <span className="muted">Stopped.</span>}
         {job?.status === 'error' && <span className="neg">{job.error}</span>}
       </div>
     </div>
@@ -928,6 +938,9 @@ function RunSweepPanel({ onDone }: { onDone: (runId: string) => void }) {
     }).then(() => setJob({ status: 'running', message: 'starting…' }))
       .catch((e) => alert(e.message))
   }
+  const stop = () => {
+    post('/sweeps/run/stop').catch((e) => alert(e.message))
+  }
 
   const running = job?.status === 'running'
 
@@ -946,7 +959,12 @@ function RunSweepPanel({ onDone }: { onDone: (runId: string) => void }) {
         <button className="btn" disabled={running} onClick={run}>
           {running ? 'Running…' : 'Run Sweep'}
         </button>
+        {running && (
+          <button className="btn" style={{ borderColor: 'var(--bad)', color: 'var(--bad)' }}
+                  onClick={stop}>Stop</button>
+        )}
         {running && <span className="muted">{job.message}</span>}
+        {job?.status === 'stopped' && <span className="muted">Stopped.</span>}
         {job?.status === 'error' && <span className="neg">{job.error}</span>}
       </div>
       <div className="muted" style={{ marginTop: 8 }}>
@@ -1128,6 +1146,97 @@ function Logs() {
         </tbody>
       </table>
     </div>
+  )
+}
+
+/* ----------------------------------------------------- Processes ---- */
+
+function fmtUptime(sec: number): string {
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60)
+  return `${h}h ${m}m ${s}s`
+}
+
+function JobStatusLine({ name, job }: { name: string; job: any }) {
+  const status = job?.status ?? 'idle'
+  const cls = status === 'running' ? 'warn' : status === 'error' ? 'bad' : status === 'done' ? 'ok' : ''
+  return (
+    <div className="check">
+      <span>{name}</span>
+      <b className={cls ? undefined : 'muted'} style={cls ? { color: `var(--${cls})` } : undefined}>
+        {status}{status === 'running' && job?.message ? ` — ${job.message}` : ''}
+      </b>
+    </div>
+  )
+}
+
+function Processes() {
+  const proc = usePoll(useCallback(() => j<any>('/processes'), []), 3000)
+  const [logLines, setLogLines] = useState<string[]>([])
+
+  const loadLogs = useCallback(() => {
+    j<string[]>('/system/logs?limit=200').then(setLogLines).catch(() => {})
+  }, [])
+  useEffect(() => {
+    loadLogs()
+    const id = setInterval(loadLogs, 4000)
+    return () => clearInterval(id)
+  }, [loadLogs])
+
+  const clearLogs = () => {
+    post('/system/logs/clear').then(() => setLogLines([])).catch((e) => alert(e.message))
+  }
+
+  return (
+    <>
+      <div className="cols">
+        <div className="card">
+          <h3>Engine Process<small>RoboTrader's own process — not a host-wide monitor</small></h3>
+          <div className="kv">
+            <Item label="PID" value={proc?.pid} />
+            <Item label="Mode" value={proc?.mode} />
+            <Item label="Uptime" value={proc ? fmtUptime(proc.uptime_sec) : null} />
+            <Item label="Memory" value={proc ? `${proc.memory_mb} MB` : null} />
+            <Item label="CPU" value={proc ? `${proc.cpu_percent}%` : null} />
+            <Item label="Threads" value={proc?.threads} />
+          </div>
+        </div>
+        <div className="card">
+          <h3>Background Jobs</h3>
+          <JobStatusLine name="Backtest" job={proc?.backtest_job} />
+          <JobStatusLine name="Sweep" job={proc?.sweep_job} />
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Scheduler Jobs<small>apscheduler — America/New_York</small></h3>
+        <table>
+          <thead><tr><th>Job</th><th>Next Run</th></tr></thead>
+          <tbody>
+            {(proc?.scheduler_jobs ?? []).map((jb: any) => (
+              <tr key={jb.id}>
+                <td>{jb.name}</td>
+                <td>{jb.next_run ? jb.next_run.replace('T', ' ').slice(0, 19) : 'not scheduled'}</td>
+              </tr>
+            ))}
+            {(proc?.scheduler_jobs ?? []).length === 0 && (
+              <tr><td colSpan={2} className="muted">No scheduler jobs registered.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="card">
+        <h3>Recent Output<small>in-memory stdout/stderr tail — not the audit trail</small></h3>
+        <div className="row">
+          <button className="btn" onClick={loadLogs}>Refresh</button>
+          <button className="btn" style={{ borderColor: 'var(--bad)', color: 'var(--bad)' }}
+                  onClick={clearLogs}>Clear</button>
+        </div>
+        <pre style={{ maxHeight: 360, overflowY: 'auto', marginTop: 10 }}>
+          {logLines.length ? logLines.join('\n') : 'Nothing captured yet.'}
+        </pre>
+      </div>
+    </>
   )
 }
 

@@ -19,6 +19,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from core.models import Mode
+from monitoring.log_buffer import clear as clear_log_buffer
+from monitoring.log_buffer import recent as recent_logs
+from monitoring.process_status import process_status
 from service.backtest_jobs import runner as backtest_runner
 from service.sweep_jobs import runner as sweep_runner
 
@@ -176,6 +179,11 @@ def create_app(engine) -> FastAPI:
     def backtests_run_status():
         return backtest_runner.status()
 
+    @app.post("/backtests/run/stop")
+    def backtests_run_stop():
+        stopped = backtest_runner.stop()
+        return {"stopped": stopped}
+
     @app.get("/sweeps")
     def sweeps():
         if not SWEEPS_DIR.exists():
@@ -219,6 +227,35 @@ def create_app(engine) -> FastAPI:
     @app.get("/sweeps/run/status")
     def sweeps_run_status():
         return sweep_runner.status()
+
+    @app.post("/sweeps/run/stop")
+    def sweeps_run_stop():
+        stopped = sweep_runner.stop()
+        return {"stopped": stopped}
+
+    @app.get("/processes")
+    def processes():
+        # Scoped to RoboTrader's own process/jobs, not a host-wide process
+        # list — PID/memory/CPU of this engine, the scheduler's registered
+        # jobs, and current backtest/sweep job status.
+        return {
+            **process_status(getattr(engine, "scheduler", None)),
+            "mode": engine.settings.mode.value,
+            "backtest_job": backtest_runner.status(),
+            "sweep_job": sweep_runner.status(),
+        }
+
+    @app.get("/system/logs")
+    def system_logs(limit: int = 200):
+        return recent_logs(limit)
+
+    @app.post("/system/logs/clear")
+    def system_logs_clear():
+        # Clears the in-memory stdout/stderr tail buffer only — NOT
+        # journal/audit.sqlite, which is the system of record and has no
+        # GUI-exposed delete path by design (README Rule 10).
+        clear_log_buffer()
+        return {"cleared": True}
 
     # --------------------------------------------------------- command side
 
