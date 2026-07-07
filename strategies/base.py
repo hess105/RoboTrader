@@ -34,3 +34,11 @@ class Strategy(ABC):
     def warmup_bars(self) -> int:
         """How much history on_daily_close needs (e.g. 200 for a 200-SMA)."""
         return 250
+
+    def explain(self, view: HistoryView, positions: dict[str, Position]) -> list[dict]:
+        """Read-only introspection for the GUI's live 'Thinking' view: the
+        SAME indicators on_daily_close computes, for every universe symbol
+        (triggered or not), so Jeff can see what a signal would need to
+        change. Never emits Signals, never journaled — default is empty for
+        strategies that don't implement it."""
+        return []

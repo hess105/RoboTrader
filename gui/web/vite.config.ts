@@ -7,7 +7,7 @@ const engine = 'http://127.0.0.1:8765'
 const apiRoutes = [
   '/status', '/account', '/positions', '/orders', '/risk', '/logs',
   '/backtests', '/strategy', '/halt', '/killswitch', '/keys',
-  '/equity', '/gate2', '/config', '/alerts', '/sweeps',
+  '/equity', '/gate2', '/config', '/alerts', '/simulate', '/thinking',
   '/processes', '/system', '/reconcile', '/notes',
 ]
 

@@ -26,11 +26,9 @@ from monitoring.log_buffer import recent as recent_logs
 from monitoring.process_status import process_status
 from service.backtest_jobs import runner as backtest_runner
 from service.simulation_jobs import runner as simulation_runner
-from service.sweep_jobs import runner as sweep_runner
 
 GUI_DIST = Path(__file__).resolve().parent.parent / "gui" / "web" / "dist"
 BACKTESTS_DIR = Path("journal/backtests")
-SWEEPS_DIR = Path("journal/sweeps")
 
 
 def _json_safe(obj):
@@ -77,15 +75,6 @@ class RunBacktestBody(BaseModel):
 class AlertPrefBody(BaseModel):
     kind: str
     enabled: bool
-
-
-class RunSweepBody(BaseModel):
-    n_samples: int = 250
-    workers: int = 5
-    is_end: str = "2021-12-31"
-    oos_start: str = "2022-01-01"
-    seed: int = 0
-    label: str | None = None
 
 
 def _safe_subdir(base: Path, name: str) -> Path:
@@ -166,6 +155,10 @@ def create_app(engine) -> FastAPI:
     def alerts_prefs_set(body: AlertPrefBody):
         return engine.alerts.set_pref(body.kind, body.enabled)
 
+    @app.get("/thinking")
+    def thinking():
+        return engine.thinking()
+
     @app.get("/logs")
     def logs(kind: str | None = None, q: str | None = None, limit: int = 300):
         rows = engine.audit.query(kind or None, limit=limit)
@@ -230,8 +223,6 @@ def create_app(engine) -> FastAPI:
         if engine.settings.mode is Mode.LIVE:
             raise HTTPException(
                 403, "Backtests are disabled while the engine is in LIVE mode.")
-        if sweep_runner.is_running():
-            raise HTTPException(409, "A sweep is already running.")
         try:
             backtest_runner.start(body.start, body.end, body.label)
         except RuntimeError as exc:
@@ -268,70 +259,15 @@ def create_app(engine) -> FastAPI:
         stopped = simulation_runner.stop()
         return {"stopped": stopped}
 
-    @app.get("/sweeps")
-    def sweeps():
-        if not SWEEPS_DIR.exists():
-            return []
-        out = []
-        for d in sorted(SWEEPS_DIR.iterdir(), reverse=True):
-            f = d / "results.json"
-            if f.exists():
-                data = json.loads(f.read_text())
-                out.append({"run_id": d.name, "label": data.get("label"),
-                            "eligible": data.get("eligible"),
-                            "n_samples": data.get("n_samples"),
-                            "full_grid_size": data.get("full_grid_size"),
-                            "profitable_folds": data.get("profitable_folds"),
-                            "overfit_warning": data.get("overfit_warning")})
-        return out
-
-    @app.get("/sweeps/{run_id}")
-    def sweep_detail(run_id: str):
-        d = _safe_subdir(SWEEPS_DIR, run_id)
-        return json.loads((d / "results.json").read_text())
-
-    @app.delete("/sweeps/{run_id}")
-    def sweep_delete(run_id: str):
-        d = _safe_subdir(SWEEPS_DIR, run_id)
-        shutil.rmtree(d)
-        return {"deleted": run_id}
-
-    @app.post("/sweeps/run")
-    def sweeps_run(body: RunSweepBody = RunSweepBody()):
-        # Same LIVE-mode and mutual-exclusion guards as /backtests/run — a
-        # sweep is dozens of backtests back to back, even more GIL/CPU
-        # contention than a single one.
-        if engine.settings.mode is Mode.LIVE:
-            raise HTTPException(
-                403, "Sweeps are disabled while the engine is in LIVE mode.")
-        if backtest_runner.is_running():
-            raise HTTPException(409, "A backtest is already running.")
-        try:
-            sweep_runner.start(body.n_samples, body.workers, body.is_end,
-                                body.oos_start, body.seed, body.label)
-        except RuntimeError as exc:
-            raise HTTPException(409, str(exc))
-        return {"started": True}
-
-    @app.get("/sweeps/run/status")
-    def sweeps_run_status():
-        return sweep_runner.status()
-
-    @app.post("/sweeps/run/stop")
-    def sweeps_run_stop():
-        stopped = sweep_runner.stop()
-        return {"stopped": stopped}
-
     @app.get("/processes")
     def processes():
         # Scoped to RoboTrader's own process/jobs, not a host-wide process
         # list — PID/memory/CPU of this engine, the scheduler's registered
-        # jobs, and current backtest/sweep job status.
+        # jobs, and current backtest job status.
         return {
             **process_status(getattr(engine, "scheduler", None)),
             "mode": engine.settings.mode.value,
             "backtest_job": backtest_runner.status(),
-            "sweep_job": sweep_runner.status(),
         }
 
     @app.get("/system/logs")

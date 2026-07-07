@@ -104,9 +104,13 @@ class OrderManager:
         self._record(order)
 
     def _record(self, order: Order) -> None:
+        # notional-sized orders leave qty NULL until the broker reports a fill
+        # (share count is only known then) — backfill it so the blotter shows
+        # an actual quantity instead of a permanently blank column.
+        qty = float(order.filled_qty) if order.filled_qty else None
         self.audit.upsert_order(order.client_order_id,
                                 broker_order_id=order.broker_order_id,
-                                status=order.status.value)
+                                status=order.status.value, qty=qty)
         self.audit.event(f"order_{order.status.value}", symbol=order.symbol,
                          side=order.side.value, order_id=order.client_order_id)
         if self.alerts is not None and order.status in (OrderStatus.REJECTED, OrderStatus.EXPIRED):

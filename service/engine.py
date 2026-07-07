@@ -344,6 +344,24 @@ class TradingEngine:
     def equity_history(self, days: int = 90) -> list[tuple[str, float]]:
         return self.audit.daily_equity(days)
 
+    def thinking(self) -> dict:
+        """Live, read-only snapshot of what the strategy is evaluating right
+        now: same indicators/data compute_signals() uses, for every universe
+        symbol (triggered or not), via Strategy.explain(). No orders, no
+        journaling, no side effects — purely for the GUI's Thinking tab."""
+        end = datetime.now(NY).date()
+        start = (pd.Timestamp(end) - pd.Timedelta(days=550)).date()
+        bars = self.data.daily_bars(self.universe, start, end)
+        frames = {str(s): df.droplevel(0).sort_index() for s, df in bars.groupby(level=0)}
+        if not frames:
+            return {"asof": None, "rows": []}
+        asof = max(df.index.max() for df in frames.values())
+        view = HistoryView(frames, asof, self.strategy.warmup_bars())
+        rows = self.strategy.explain(view, dict(self.portfolio.positions))
+        for row in rows:
+            row["bucket"] = self.bucket_of.get(row["symbol"], "other")
+        return {"asof": str(asof.date()), "rows": rows}
+
     def gate2_status(self) -> dict:
         """Progress against the Gate 2 checklist (docs/GATES.md): >=60 paper
         trading days AND >=30 closed trades, two kill-switch drills, and a

@@ -90,6 +90,51 @@ class TrendPullback(Strategy):
         signals.extend(sig for _, sig in candidates)
         return signals
 
+    def explain(self, view, positions):
+        p = self.params
+        market_ok = self._market_ok(view, p)
+        rows = []
+        for sym in view.symbols:
+            df = view.history(sym)
+            held = sym in positions
+            if len(df) < p["trend_sma"] + 1:
+                rows.append({"symbol": sym, "strategy": self.name, "held": held,
+                             "would_buy": False, "note": "insufficient history"})
+                continue
+            close = df["close"]
+            last = float(close.iloc[-1])
+            trend = sma(close, p["trend_sma"]).iloc[-1]
+            r = rsi(close, p["pullback_rsi_period"]).iloc[-1]
+            a = float(atr(df["high"], df["low"], close, p["atr_period"]).iloc[-1])
+            trend_f = None if pd.isna(trend) else float(trend)
+            rsi_f = None if pd.isna(r) else float(r)
+            above_trend = trend_f is not None and last > trend_f
+            washed_out = rsi_f is not None and rsi_f < p["pullback_rsi_max"]
+            would_buy = bool(above_trend and washed_out and market_ok and not held)
+            if held:
+                pos = positions[sym]
+                days_held = int((df.index > pd.Timestamp(pos.opened_at)).sum())
+                note = (f"held {days_held}d, RSI {rsi_f:.1f} "
+                        f"(exits at >= {p['exit_rsi_min']} or {p['max_hold_days']}d)")
+            elif not market_ok:
+                note = "regime gate closed (market proxy below its SMA)"
+            elif would_buy:
+                note = f"BUY candidate: RSI {rsi_f:.1f} < {p['pullback_rsi_max']}, above SMA{p['trend_sma']}"
+            else:
+                reasons = []
+                if not above_trend:
+                    reasons.append(f"below SMA{p['trend_sma']} ({trend_f:.2f})" if trend_f else "SMA unavailable")
+                if not washed_out:
+                    reasons.append(f"RSI {rsi_f:.1f} not washed out (need < {p['pullback_rsi_max']})" if rsi_f is not None else "RSI unavailable")
+                note = "; ".join(reasons) or "watching"
+            rows.append({
+                "symbol": sym, "strategy": self.name, "close": last,
+                "sma": trend_f, "rsi": rsi_f,
+                "atr_pct": None if pd.isna(a) or last == 0 else a / last * 100,
+                "held": held, "would_buy": would_buy, "note": note,
+            })
+        return rows
+
     def _market_ok(self, view, p) -> bool:
         if not p.get("market_filter", False):
             return True

@@ -44,3 +44,12 @@ class CompositeStrategy(Strategy):
 
     def warmup_bars(self) -> int:
         return max(c.warmup_bars() for c in self.children)
+
+    def explain(self, view, positions):
+        default_owner = self.children[0].name
+        rows = []
+        for child in self.children:
+            mine = {s: p for s, p in positions.items()
+                    if (p.strategy or default_owner) == child.name}
+            rows.extend(child.explain(view, mine))
+        return rows

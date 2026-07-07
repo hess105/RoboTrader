@@ -79,6 +79,51 @@ class MomentumRotation(Strategy):
                 Decimal(str(round(stop, 4))), ts))
         return signals
 
+    def explain(self, view, positions):
+        p = self.params
+        symbols = [s for s in p.get("symbols") or view.symbols if s in view.symbols]
+        slow = int(p["score_slow"])
+        scores: dict[str, float] = {}
+        for sym in symbols:
+            close = view.history(sym)["close"]
+            if len(close) < slow + 1:
+                continue
+            fast_r = float(close.iloc[-1] / close.iloc[-1 - int(p["score_fast"])] - 1)
+            slow_r = float(close.iloc[-1] / close.iloc[-1 - slow] - 1)
+            scores[sym] = (fast_r + slow_r) / 2
+        ranked = sorted(scores, key=scores.get, reverse=True)
+        rank_of = {sym: i + 1 for i, sym in enumerate(ranked)}
+        rebalance_today = self._is_rebalance_day(view, symbols)
+
+        rows = []
+        for sym in symbols:
+            held = sym in positions
+            score = scores.get(sym)
+            rank = rank_of.get(sym)
+            if score is None:
+                rows.append({"symbol": sym, "strategy": self.name, "held": held,
+                             "would_buy": False, "note": "insufficient history"})
+                continue
+            in_top = rank is not None and rank <= int(p["top_n"])
+            above_min = score > float(p["min_score"])
+            would_buy = bool(in_top and above_min and not held)
+            if held:
+                note = f"held, rank {rank}, score {score:.3f} (exits below score 0 or rank > {p['exit_rank']})"
+            elif would_buy:
+                note = f"BUY candidate: rank {rank} of {len(ranked)}, score {score:.3f}"
+            elif not above_min:
+                note = f"score {score:.3f} <= {p['min_score']} (absolute-momentum filter)"
+            else:
+                note = f"rank {rank} of {len(ranked)}, outside top {p['top_n']}"
+            if not rebalance_today:
+                note += " — not a rebalance day, evaluated for reference only"
+            rows.append({
+                "symbol": sym, "strategy": self.name, "close": None,
+                "score": score, "rank": rank, "held": held,
+                "would_buy": would_buy, "note": note,
+            })
+        return rows
+
     def _is_rebalance_day(self, view, symbols) -> bool:
         """True on the first trading day of an ISO week."""
         for sym in symbols:
