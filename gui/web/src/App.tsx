@@ -34,6 +34,11 @@ const post = (url: string, body: unknown = {}) =>
   })
 const fmt$ = (v: number | null | undefined) => (v == null ? '—' : '$' + Number(v).toFixed(2))
 const fmtP = (v: number | null | undefined) => (v == null ? '—' : Number(v).toFixed(2) + '%')
+// profit_factor is JSON-null specifically when the backend sanitized an
+// `inf` (zero losing trades — backtest/metrics.py) for JSON compliance;
+// there's no other way this particular field goes missing, so treat null
+// as "infinite" here rather than blank.
+const fmtPF = (v: number | null | undefined) => (v == null ? '∞' : String(v))
 
 function usePoll<T>(fetcher: () => Promise<T>, ms: number): T | null {
   const [data, setData] = useState<T | null>(null)
@@ -782,7 +787,7 @@ function Results() {
                 <td>{r.run_id}</td>
                 <td>{r.trades}</td>
                 <td>{r.sharpe ?? ''}</td>
-                <td>{r.profit_factor ?? ''}</td>
+                <td>{fmtPF(r.profit_factor)}</td>
                 <td>{r.max_drawdown_pct ?? ''}%</td>
                 <td>{r.total_return_pct ?? ''}%</td>
                 <td>{r.drawdown_halts ?? ''}</td>
@@ -802,7 +807,7 @@ function Results() {
             <div className="stats">
               <Stat label="Trades" value={detail.metrics.trades} />
               <Stat label="Sharpe" value={detail.metrics.sharpe} />
-              <Stat label="Profit factor" value={detail.metrics.profit_factor} />
+              <Stat label="Profit factor" value={fmtPF(detail.metrics.profit_factor)} />
               <Stat label="Max drawdown" value={detail.metrics.max_drawdown_pct + '%'} tone="neg" />
               <Stat label="Total return" value={detail.metrics.total_return_pct + '%'}
                     tone={detail.metrics.total_return_pct >= 0 ? 'pos' : 'neg'} />
@@ -830,7 +835,7 @@ function Results() {
                 {detail.stress && (
                   <div className="check">
                     <span>survives 2x costs (PF)</span>
-                    <b>{detail.stress.profit_factor}</b>
+                    <b>{fmtPF(detail.stress.profit_factor)}</b>
                   </div>
                 )}
               </div>
@@ -1055,10 +1060,10 @@ function Sweep() {
                     <td>{i + 1}</td>
                     <td>{r.trades}</td>
                     <td>{r.sharpe}</td>
-                    <td>{r.pf}</td>
+                    <td>{fmtPF(r.pf)}</td>
                     <td>{r.maxdd}%</td>
                     <td className={r.ret >= 0 ? 'pos' : 'neg'}>{r.ret}%</td>
-                    <td>{r.pf2x}</td>
+                    <td>{fmtPF(r.pf2x)}</td>
                     <td className={r.ok2x ? 'pos' : 'neg'}>{r.ok2x ? 'PASS' : 'FAIL'}</td>
                   </tr>
                 ))}

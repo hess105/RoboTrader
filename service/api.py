@@ -12,10 +12,11 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+import math
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from core.models import Mode
@@ -28,6 +29,26 @@ from service.sweep_jobs import runner as sweep_runner
 GUI_DIST = Path(__file__).resolve().parent.parent / "gui" / "web" / "dist"
 BACKTESTS_DIR = Path("journal/backtests")
 SWEEPS_DIR = Path("journal/sweeps")
+
+
+def _json_safe(obj):
+    """inf/-inf/nan are legitimate values here (e.g. profit_factor with zero
+    losing trades, backtest/metrics.py), but plain JSON has no representation
+    for them — Starlette's default JSONResponse renders with allow_nan=False
+    and raises ValueError on them. Applied globally (see SafeJSONResponse)
+    rather than patching every endpoint that could return a metrics dict."""
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
+class SafeJSONResponse(JSONResponse):
+    def render(self, content) -> bytes:
+        return super().render(_json_safe(content))
 
 
 class Note(BaseModel):
@@ -59,7 +80,8 @@ class RunSweepBody(BaseModel):
 
 
 def create_app(engine) -> FastAPI:
-    app = FastAPI(title="RoboTrader Engine", docs_url=None, redoc_url=None)
+    app = FastAPI(title="RoboTrader Engine", docs_url=None, redoc_url=None,
+                 default_response_class=SafeJSONResponse)
 
     # ------------------------------------------------------------ read side
 
