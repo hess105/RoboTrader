@@ -112,6 +112,49 @@ blind," not "hope nothing moved while we were out."
 
 ---
 
+## Overnight-specific risk model (`overnight_effect`, since 2026-08-23)
+
+The layers above are unchanged, but one of this strategy's structural
+properties changes what "protected" means: **a position is never open
+during a monitored trading session at all.** It's bought after the close,
+force-sold at the very next open, and there are zero `tick()` calls in
+between — the engine-side protective-stop monitor (layer 5 above) has
+nothing to watch, because the market is closed for the entire time the
+position exists. Every `stop_price` this strategy attaches to a signal is
+real (it feeds `risk.approve()`'s position-sizing formula), but it can
+structurally never fire as an exit — there's no session for it to fire in.
+
+That means the risk control for this strategy isn't a stop at all — it's
+**diversification**: `max_concurrent_positions` (12) and
+`max_position_notional_pct` (12%) are set so no single name's overnight gap
+can do outsized damage, and `max_per_bucket` (3) keeps that spread across
+sectors rather than concentrated in one theme. This is a deliberate,
+explicit choice (Jeff, 2026-08-23): the dominant tail risk for this
+strategy is a name gapping on earnings or news between the close and the
+open, and **v1 accepts that risk via diversification rather than adding an
+earnings-calendar blackout filter** (Alpaca's free tier doesn't offer one
+anyway). If a name gaps hard overnight, the loss on that one position is
+capped by its notional cap, not by a stop that was never able to fire.
+
+The exit side has its own bypass, structurally similar to the kill switch's:
+`_force_close_overnight` (backtest) / `_submit_overnight_exits` (live)
+never call `risk.approve()` — they sell every held overnight position at
+the open unconditionally, regardless of halt state, because that's always
+risk-reducing. A DRAWDOWN or KILL_SWITCH halt still blocks new *entries*
+into overnight positions the normal way (through `risk.approve()`), same as
+any other strategy.
+
+**The other known live/backtest gap worth naming here** (see
+`docs/STRATEGY.md`'s "why the entry timing isn't a true close fill"): live
+entries submit off a same-day intraday snapshot five minutes before the
+close, not the true final close backtest uses — because Alpaca's
+fractional/notional orders can't be submitted extended-hours or as a limit
+order, so there's no mechanism to wait for the actual close and still get a
+fill that evening. This is a small, accepted approximation, not a bug —
+Gate 2's slippage check is what validates whether it matters in practice.
+
+---
+
 ## Can the Pattern Day Trading rule ever be violated — even during a full kill-switch stop?
 
 Short answer: **no, and not because of a guard that could fail — because

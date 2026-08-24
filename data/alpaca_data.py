@@ -41,6 +41,29 @@ class AlpacaData:
         out = pd.concat(frames, names=["symbol", "ts"])
         return out.sort_index()
 
+    def today_snapshot(self, symbols: list[str]) -> dict[str, dict]:
+        """Best-effort intraday proxy for "today's bar so far": today's real
+        open plus a latest-trade price standing in for the not-yet-final
+        close. Used only by the live/paper 15:55 ET overnight-entry job
+        (service/engine.py) to approximate a close fill while still using a
+        regular-hours notional (fractional) order — Alpaca's notional orders
+        don't support extended-hours submission, so there is no way to wait
+        for the true close and still place one. Backtest never calls this;
+        it uses the true completed close. Skips symbols Alpaca has no
+        same-day bar for yet (e.g. newly listed, halted)."""
+        from alpaca.data.requests import StockSnapshotRequest
+
+        snaps = self._client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=symbols))
+        out: dict[str, dict] = {}
+        for sym, snap in snaps.items():
+            bar = snap.daily_bar
+            if bar is None:
+                continue
+            close = float(snap.latest_trade.price) if snap.latest_trade else float(bar.close)
+            out[sym] = {"open": float(bar.open), "high": float(bar.high),
+                       "low": float(bar.low), "close": close, "volume": int(bar.volume)}
+        return out
+
     def latest_quote(self, symbol: str) -> tuple[float, float]:
         from alpaca.data.requests import StockLatestQuoteRequest
 

@@ -8,11 +8,18 @@ Startup sequence (order matters):
   3. Reconciler.run() — on mismatch, RECONCILE halt (entries blocked) until
      an operator resets with a note
   4. scheduler jobs (all times America/New_York, weekdays):
-       16:15  compute signals on COMPLETED daily bars -> risk gate -> journal
-              intents as status 'queued_open' (matches the backtest: signal
-              at close T, fill at open T+1)
-       09:35  submit queued intents (entries re-checked against current halt
-              state; overnight breaker trips cancel them)
+       15:55  compute_signals(): overnight_effect's entries — an intraday
+              snapshot (AlpacaData.today_snapshot(), a same-day proxy for
+              the close, since Alpaca's fractional/notional orders don't
+              support extended-hours submission — see docs/STRATEGY.md) ->
+              risk gate -> submitted IMMEDIATELY as regular-hours notional
+              market orders, not queued (mirrors backtest/engine.py's
+              close-fill rule for overnight_only strategies)
+       09:35  submit_queued(): force-sell every overnight position from
+              last night's close, unconditionally, at the open (mirrors
+              the backtest's forced next-open exit — bypasses halts the
+              same way the kill switch does); also submits any ordinary
+              queued_open intents, re-checked against current halt state
        09:00  reconcile + clear day-trade ledger
        every minute 09:00-16:59  tick: health, equity mark -> breakers,
               fill sync, engine-side protective stop monitor, and (after
@@ -35,7 +42,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from core.models import OrderIntent, Position, Side, Signal
+from core.models import OrderIntent, Position, Side, Signal, new_client_order_id
 from core.settings import Settings, broker_creds, load_settings
 from data.alpaca_data import AlpacaData
 from data.view import HistoryView
@@ -47,7 +54,7 @@ from monitoring.alerts import Alerter
 from monitoring.health import HealthMonitor
 from risk.kill_switch import KillSwitch
 from risk.manager import HaltState, RiskManager
-from strategies import build_strategy
+from strategies import build_strategy, overnight_strategy_names
 
 NY = ZoneInfo("America/New_York")
 
@@ -85,6 +92,7 @@ class TradingEngine:
             kill_after_min=int(mon.get("kill_after_disconnect_min", 15)),
         )
         self.strategy = build_strategy(self.cfg)
+        self.overnight_strategies = overnight_strategy_names(self.strategy)
         self.universe = [s for ss in self.cfg["universe"]["buckets"].values() for s in ss]
         self.bucket_of = {s: b for b, ss in self.cfg["universe"]["buckets"].items() for s in ss}
         self.portfolio = PortfolioState()
@@ -116,7 +124,7 @@ class TradingEngine:
 
         s = BackgroundScheduler(timezone=NY)
         wd = {"day_of_week": "mon-fri"}
-        s.add_job(self.compute_signals, "cron", hour=16, minute=15, **wd)
+        s.add_job(self.compute_signals, "cron", hour=15, minute=55, **wd)
         s.add_job(self.submit_queued, "cron", hour=9, minute=35, **wd)
         s.add_job(self.reconcile_job, "cron", hour=9, minute=0, **wd)
         s.add_job(self.tick, "cron", hour="9-16", minute="*", **wd)
@@ -127,8 +135,13 @@ class TradingEngine:
     # ------------------------------------------------------------------ jobs
 
     def compute_signals(self) -> None:
-        """16:15 ET: completed daily bars -> signals -> risk gate -> queue for
-        tomorrow's open. Mirrors the backtest's close-T/fill-T+1 semantics."""
+        """15:55 ET: overnight_effect's entry job. Splices an intraday
+        snapshot (a same-day proxy for the close — see AlpacaData.
+        today_snapshot()) onto completed daily-bar history as "today's" bar,
+        so the strategy runs unmodified against what looks like a normal
+        completed day. Overnight BUY signals submit immediately (see
+        _evaluate_and_queue); any non-overnight sleeve's signals still queue
+        for tomorrow's open, same as before."""
         if self.paused or self.risk.halt == HaltState.KILL_SWITCH:
             self.audit.event("signals_skipped", reason=f"paused={self.paused} halt={self.risk.halt}")
             return
@@ -136,18 +149,35 @@ class TradingEngine:
         start = (pd.Timestamp(end) - pd.Timedelta(days=550)).date()
         bars = self.data.daily_bars(self.universe, start, end)
         frames = {str(s): df.droplevel(0).sort_index() for s, df in bars.groupby(level=0)}
-        asof = max(df.index.max() for df in frames.values())
         self.refresh_portfolio()
+        if self.overnight_strategies:
+            asof = pd.Timestamp(datetime.now(NY).date())
+            snapshot = self.data.today_snapshot(self.universe)
+            for sym, row in snapshot.items():
+                if sym not in frames:
+                    continue
+                hist = frames[sym]
+                frames[sym] = pd.concat(
+                    [hist[hist.index < asof], pd.DataFrame([row], index=[asof])])
+        else:
+            asof = max(df.index.max() for df in frames.values())
         view = HistoryView(frames, asof, self.strategy.warmup_bars())
         self._evaluate_and_queue(view, asof)
 
     def _evaluate_and_queue(self, view: HistoryView, asof) -> int:
-        """Signal evaluation + risk gate + queueing, factored out of
+        """Signal evaluation + risk gate + routing, factored out of
         compute_signals() so a historical `asof` (multi-day simulation) can
-        drive the exact same logic a live 16:15 run does. Prices off
+        drive the exact same logic a live run does. Prices off
         `view.history()`, which is clock-gated to `asof` — never the
         untrimmed frame's latest row, so this is safe to call with a
-        historical asof without leaking future prices."""
+        historical asof without leaking future prices.
+
+        SELL signals and BUY signals from a normal sleeve queue for
+        submission at the next open, as always. A BUY signal from an
+        overnight_only sleeve submits IMMEDIATELY instead — it fills at
+        today's close, not tomorrow's open (mirrors backtest/engine.py);
+        the caller is responsible for the fill actually landing (broker
+        fill-sync in live, SimBroker in simulate_day.py)."""
         signals = self.strategy.on_daily_close(view, dict(self.portfolio.positions))
         queued = 0
         for sig in ([s for s in signals if s.side is Side.SELL]
@@ -160,14 +190,19 @@ class TradingEngine:
             intent = self.risk.approve(sig, self.portfolio, price, spread_pct)
             if intent is None:
                 continue
-            self.audit.upsert_order(
-                intent.client_order_id, symbol=sig.symbol, side=sig.side.value,
-                notional=float(intent.notional) if intent.notional else None,
-                qty=float(intent.qty) if intent.qty else None, status="queued_open")
+            overnight_entry = sig.side is Side.BUY and sig.strategy in self.overnight_strategies
+            if overnight_entry:
+                self.om.execute(intent)
+            else:
+                self.audit.upsert_order(
+                    intent.client_order_id, symbol=sig.symbol, side=sig.side.value,
+                    notional=float(intent.notional) if intent.notional else None,
+                    qty=float(intent.qty) if intent.qty else None, status="queued_open")
             self.audit.event("order_queued", symbol=sig.symbol, side=sig.side.value,
                              order_id=intent.client_order_id, reason=sig.reason)
             self.alerts.send("INFO", "order",
-                             f"queued {sig.side.value} {sig.symbol}: {sig.reason}")
+                             f"{'submitted' if overnight_entry else 'queued'} "
+                             f"{sig.side.value} {sig.symbol}: {sig.reason}")
             if sig.side is Side.BUY:
                 self.portfolio.pending_entries.add(sig.symbol)
                 if sig.stop_price is not None:
@@ -179,12 +214,36 @@ class TradingEngine:
         return queued
 
     def submit_queued(self) -> None:
-        """09:35 ET: submit yesterday's queued intents. Entries re-check the
-        halt state — an overnight breaker trip cancels them, exits proceed."""
+        """09:35 ET: force-sell every overnight position from last night's
+        close (unconditional), then submit any ordinary queued intents.
+        Entries among those re-check the halt state — an overnight breaker
+        trip cancels them, exits proceed."""
         self.portfolio.bought_today.clear()
         self.refresh_portfolio()
+        self._submit_overnight_exits()
         self._submit_pending_orders()
         self.refresh_portfolio()
+
+    def _submit_overnight_exits(self) -> None:
+        """Unconditional market sell, at the open, of every currently held
+        position owned by an overnight_only strategy — bypasses
+        risk.approve()/day_trade_guard/halts entirely, the same way the
+        kill switch bypasses them, because it's always risk-reducing (these
+        strategies never hold past one session by construction). Mirrors
+        backtest/engine.py's _force_close_overnight."""
+        if not self.overnight_strategies:
+            return
+        for sym, pos in list(self.portfolio.positions.items()):
+            if pos.strategy not in self.overnight_strategies:
+                continue
+            sig = Signal(pos.strategy, sym, Side.SELL, "overnight_exit (next open)",
+                        None, datetime.now(timezone.utc))
+            intent = OrderIntent(
+                client_order_id=new_client_order_id(sig.strategy, sym),
+                signal=sig, notional=None, qty=pos.qty, limit_price=None,
+            )
+            self.om.execute(intent)
+            self.portfolio.positions.pop(sym, None)
 
     def _submit_pending_orders(self) -> None:
         """Submit any queued_open intents against the current halt state.

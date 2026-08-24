@@ -265,6 +265,38 @@ function Stat({ label, value, tone }: { label: string; value: unknown; tone?: 'p
   )
 }
 
+/* ---------------------------------------------- strategy blurb ---- */
+
+function StrategyExplainer({ compact }: { compact?: boolean }) {
+  return (
+    <div className="card">
+      <h3>How This Strategy Works<small>overnight_effect</small></h3>
+      <p>
+        Every trading day, right before the close, RoboTrader ranks the
+        universe by how hard each name sold off <i>during that day's own
+        session</i> relative to its normal volatility, and buys a
+        diversified basket of the biggest washouts — on the well-documented
+        bet that overnight returns tend to partially reverse an outsized
+        intraday selloff. The whole basket is sold again, unconditionally,
+        at the very next morning's open. The strategy is never exposed to a
+        full trading session — only to the gap between one close and the
+        next open.
+      </p>
+      {!compact && (
+        <p className="muted">
+          The <b>Stop</b> shown for a position is a sizing reference only,
+          not a monitored exit — the position is never open during market
+          hours, so there's no session for a stop to fire in. The real risk
+          control is diversification: many small positions across sectors,
+          each capped well under the account's total exposure, rather than
+          any single name being allowed to matter too much if it gaps on
+          news overnight.
+        </p>
+      )}
+    </div>
+  )
+}
+
 /* -------------------------------------------------- Dashboard ---- */
 
 function Dashboard({ status, confirmAction }: {
@@ -306,6 +338,7 @@ function Dashboard({ status, confirmAction }: {
   return (
     <>
       <KillSwitch />
+      <StrategyExplainer />
 
       <div className="grid">
         <div className="card"><h3>Equity</h3><div className="big">{fmt$(status?.equity)}</div></div>
@@ -338,7 +371,7 @@ function Dashboard({ status, confirmAction }: {
               {(positions ?? []).map((p) => (
                 <tr key={p.symbol}>
                   <td><b>{p.symbol}</b></td>
-                  <td className="muted">{(p.strategy || '').replace('_rotation', '').replace('trend_pullback', 'pullback')}</td>
+                  <td className="muted">{(p.strategy || '').replace('overnight_effect', 'overnight').replace('_rotation', '').replace('trend_pullback', 'pullback')}</td>
                   <td>{p.qty}</td>
                   <td>{fmt$(p.avg_entry)}</td>
                   <td>{fmt$(p.current_price)}</td>
@@ -481,8 +514,10 @@ function Config() {
         ))}
       </div>
 
+      <StrategyExplainer compact />
+
       <div className="card">
-        <h3>Strategy Configuration<small>strategies/composite.py sleeves</small></h3>
+        <h3>Strategy Configuration<small>strategies/overnight_effect.py</small></h3>
         {strategies.map(([name, params]) => (
           <div key={name} className="subcard">
             <h4>{name}</h4>
@@ -1082,6 +1117,8 @@ function Simulate() {
 function indicatorSummary(r: any): string {
   const parts: string[] = []
   if (r.close != null) parts.push('close ' + fmt$(r.close))
+  if (r.open != null) parts.push('open ' + fmt$(r.open))
+  if (r.intraday_ret_pct != null) parts.push('intraday ' + Number(r.intraday_ret_pct).toFixed(2) + '%')
   if (r.sma != null) parts.push('SMA ' + Number(r.sma).toFixed(2))
   if (r.rsi != null) parts.push('RSI ' + Number(r.rsi).toFixed(1))
   if (r.atr_pct != null) parts.push('ATR ' + Number(r.atr_pct).toFixed(2) + '%')

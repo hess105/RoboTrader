@@ -11,11 +11,13 @@ from __future__ import annotations
 from strategies.base import Strategy
 from strategies.composite import CompositeStrategy
 from strategies.momentum_rotation import MomentumRotation
+from strategies.overnight_effect import OvernightEffect
 from strategies.trend_pullback import TrendPullback
 
 REGISTRY: dict[str, type[Strategy]] = {
     TrendPullback.name: TrendPullback,
     MomentumRotation.name: MomentumRotation,
+    OvernightEffect.name: OvernightEffect,
 }
 
 
@@ -23,6 +25,18 @@ def build_strategy(cfg: dict) -> Strategy:
     entries = cfg.get("strategies") or [cfg["strategy"]]
     children = [REGISTRY[e["name"]](_resolve_params(e["params"], cfg)) for e in entries]
     return children[0] if len(children) == 1 else CompositeStrategy(children)
+
+
+def overnight_strategy_names(strategy: Strategy) -> set[str]:
+    """Names of the (possibly composited) sleeves flagged overnight_only —
+    every position they open is force-closed at the next session's open by
+    the engine itself, never by a strategy-computed exit. Used by
+    backtest/engine.py and service/engine.py so neither has to know whether
+    `strategy` is a single sleeve or a CompositeStrategy."""
+    children = getattr(strategy, "children", None)
+    if children is not None:
+        return {c.name for c in children if c.overnight_only}
+    return {strategy.name} if strategy.overnight_only else set()
 
 
 def _resolve_params(params: dict, cfg: dict) -> dict:

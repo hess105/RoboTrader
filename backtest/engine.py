@@ -35,6 +35,7 @@ from core.models import OrderIntent, Position, Side
 from core.settings import Settings
 from data.view import HistoryView
 from risk.manager import HaltState, RiskManager
+from strategies import overnight_strategy_names
 from strategies.base import Strategy
 
 
@@ -101,6 +102,7 @@ class BacktestEngine:
             for b, syms in self.cfg["universe"]["buckets"].items()
             for s in syms
         }
+        self.overnight_strategies = overnight_strategy_names(strategy)
 
     def run(self, bars: pd.DataFrame, start=None, end=None) -> "BacktestResult":
         frames = {str(s): df.droplevel(0).sort_index() for s, df in bars.groupby(level=0)}
@@ -166,6 +168,9 @@ class BacktestEngine:
                     self._exit(pf, sym, float(row["open"]), t, intent.signal.reason, trades)
             pending = []
 
+            # 1.5 Force-close any overnight position at today's open.
+            self._force_close_overnight(pf, today, t, trades)
+
             # 2. Broker-resting protective stops (fire even under halts).
             for sym, pos in list(pf.positions.items()):
                 if pos.stop_price is None or sym not in today:
@@ -197,6 +202,19 @@ class BacktestEngine:
                     continue
                 if sig.side is Side.BUY:            # reserve settled cash now
                     pf.settled_cash -= float(intent.notional)
+                    if sig.strategy in self.overnight_strategies:
+                        # Overnight entries fill NOW, at today's own close —
+                        # never queued to tomorrow's open like a normal entry.
+                        fill_px = float(self.costs.fill_price(Decimal(str(px)), Side.BUY))
+                        qty = float(intent.notional) / fill_px
+                        pf.positions[sig.symbol] = Position(
+                            symbol=sig.symbol, qty=Decimal(str(qty)),
+                            avg_entry=Decimal(str(fill_px)),
+                            stop_price=intent.signal.stop_price,
+                            opened_at=t, bucket=self.bucket_of.get(sig.symbol, "other"),
+                            strategy=intent.signal.strategy,
+                        )
+                        continue
                     pf.pending_entries.add(sig.symbol)
                 pending.append(intent)
 
@@ -209,6 +227,21 @@ class BacktestEngine:
         metrics = compute_metrics(equity, trades)
         metrics["drawdown_halts"] = self.risk.drawdown_trips
         return BacktestResult(equity, trades, metrics, self.cfg, open_positions)
+
+    def _force_close_overnight(self, pf: BTPortfolio, today: dict, t: pd.Timestamp,
+                               trades: list[Trade]) -> None:
+        """Unconditionally exits every held position owned by an
+        overnight_only strategy at today's open — bypasses risk.approve()/
+        day_trade_guard entirely, the same way protective stops and the kill
+        switch do, because it is always risk-reducing (these strategies
+        never hold past one session by construction)."""
+        if not self.overnight_strategies:
+            return
+        for sym, pos in list(pf.positions.items()):
+            if pos.strategy not in self.overnight_strategies or sym not in today:
+                continue
+            self._exit(pf, sym, float(today[sym]["open"]), t,
+                      "overnight_exit (next open)", trades)
 
     def _buy_fill_price(self, intent: OrderIntent, row) -> float | None:
         """Market buys fill at the open plus adverse costs. Resting-limit buys:

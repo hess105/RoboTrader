@@ -17,6 +17,12 @@ from data.view import HistoryView
 class Strategy(ABC):
     name: str = "unnamed"
 
+    # True for strategies whose every position is opened at its own signal
+    # bar's close and force-closed at the very next session's open by the
+    # engine itself (backtest/engine.py, service/engine.py) — never by a
+    # SELL signal from the strategy. See strategies/overnight_effect.py.
+    overnight_only: bool = False
+
     def __init__(self, params: dict):
         self.params = params
 

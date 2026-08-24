@@ -6,62 +6,70 @@ account:
   account_type: cash              # cash account => no PDT rule; T+1 settlement applies
 
 universe:
-  # Liquid ETFs + mega-caps only — the Gate-1-validated set. A 54-symbol
-  # expansion was tested 2026-07-06 and REJECTED by the gates: with more
-  # names the portfolio stays near-fully invested through crashes (max DD
-  # 20-23%, 2022 fold negative). More symbols diluted the edge into noisier
-  # names; do not widen this list without a fresh Gate 1 cycle.
+  # Curated Dow-30 + Nasdaq-100 snapshot (deduplicated, ~114 liquid large/
+  # mega-cap names), grouped into approximate sector buckets so max_per_bucket
+  # stays a meaningful correlation cap at this scale. Hand-maintained, same
+  # discipline as the prior 26-symbol list — NOT a live index feed; expect
+  # membership drift over time and refresh periodically. Replaced the old
+  # ETF/megacap list 2026-08-23 for the overnight_effect strategy, which
+  # needs a much broader stock-selection universe than a handful of ETFs.
   buckets:
-    index_equity: [SPY, QQQ, IWM, DIA]
-    sectors:      [XLK, XLF, XLE, XLV, XLI, XLP, XLU, XLY, XLB]
-    defensive:    [TLT, IEF, GLD]
-    megacap:      [AAPL, MSFT, NVDA, GOOGL, AMZN, META, AVGO, JPM, JNJ, XOM]
-  min_avg_dollar_volume: 50000000   # $50M/day floor — belt-and-suspenders for this list
+    technology: [AAPL, MSFT, NVDA, AVGO, ASML, ADBE, CSCO, AMD, QCOM, INTU,
+                 AMAT, TXN, ADI, LRCX, PANW, MU, KLAC, SNPS, CDNS, MRVL,
+                 NXPI, WDAY, FTNT, CDW, ZS, ON, ANSS, TTD, TEAM, GFS,
+                 SMCI, CRM, IBM, DDOG, CTSH]
+    communication_services: [GOOGL, META, NFLX, TMUS, CMCSA, CHTR, WBD,
+                              SIRI, DIS, VZ, EA]
+    consumer_discretionary: [AMZN, TSLA, HD, MCD, NKE, BKNG, SBUX, MAR,
+                              ORLY, ABNB, ROST, DASH, MELI, LULU]
+    consumer_staples: [PG, WMT, KO, PEP, COST, MDLZ, KHC, DLTR, KDP, MNST,
+                        CCEP, WBA]
+    financials: [V, GS, AXP, TRV, JPM, PYPL]
+    healthcare: [UNH, JNJ, MRK, AMGN, ISRG, VRTX, GILD, REGN, BIIB, MRNA,
+                 DXCM, IDXX, GEHC, ILMN]
+    industrials: [CAT, HON, BA, MMM, CSX, CTAS, ODFL, PAYX, CPRT, FAST,
+                  VRSK, ROP, PCAR, CSGP]
+    energy: [CVX, FANG, BKR]
+    materials: [SHW, LIN]
+    utilities: [AEP, EXC, XEL]
+  min_price: 10                     # floor for the strategy's price filter
+  min_avg_dollar_volume: 50000000   # $50M/day floor for the strategy's liquidity filter
   max_spread_pct: 0.05              # reject entry if spread > 5 bps of mid
 
-# Two complementary sleeves run as one portfolio (strategies/composite.py):
-# mean reversion earns in choppy uptrends, momentum earns in sustained trends
-# (2017 tech, 2022 energy) — the folds where the pullback sleeve goes flat.
-# All params selected in-sample 2016-2021, validated once OOS 2022-2026
-# (scripts/sweep_params.py, journal/backtests). Set 2026-07-06.
+# Single sleeve (strategies/composite.py is unused while there's only one).
+# Replaced the trend_pullback + momentum_rotation swing sleeves 2026-08-23
+# with overnight_effect (strategies/overnight_effect.py) — buys a basket at
+# the close, sells it at the next open. Starting-point params below are
+# UNVALIDATED: this resets the pipeline to Gate 1 (docs/GATES.md); real
+# tuning is a scripts/sweep_params.py exercise, not done yet.
 strategies:
-  - name: trend_pullback
+  - name: overnight_effect
     params:
-      trend_sma: 200          # only long when close > 200-day SMA
-      pullback_rsi_period: 2
-      pullback_rsi_max: 10    # entry: RSI(2) below this in an uptrend
-      exit_rsi_min: 70        # exit: RSI(2) above this...
-      max_hold_days: 5        # ...or time stop
+      buckets: [technology, communication_services, consumer_discretionary,
+                consumer_staples, financials, healthcare, industrials,
+                energy, materials, utilities]
       atr_period: 14
-      stop_atr_mult: 2.0      # hard stop 2*ATR below entry estimate
-      entry_limit_atr: 0.25   # rest a DAY limit below the signal close;
-                              # unfilled entries lapse (buy the dip's dip)
-      min_atr_pct: 1.5        # volatility floor: skip symbols whose ATR% can't
-                              # clear round-trip costs (the XLU problem)
-      market_filter: false    # SPY>SMA200 regime gate — tested, didn't earn its
-      market_filter_symbol: SPY   # complexity (hurt 2022 bear-rally entries)
-  - name: momentum_rotation
-    params:
-      buckets: [index_equity, sectors, defensive, megacap]
-      top_n: 1                # hold the single strongest name/ETF
-      score_fast: 63          # score = mean of 3m and 6m return
-      score_slow: 126
-      min_score: 0.0          # absolute filter: cash beats the least-bad long
-      exit_rank: 3            # exit when it drops out of the top 3
-      stop_atr_mult: 3.0      # wide stop: trends need room
-      atr_period: 14
+      stop_atr_mult: 2.5       # sizing anchor only — see strategy docstring;
+                                # this never fires as a monitored exit
+      min_atr_pct: 1.0         # volatility floor: guards the score's denominator
+      min_price: 10            # skip low-price names (microstructure/gap noise)
+      min_avg_dollar_volume: 50000000  # liquidity floor, applied per-candidate
+      dollar_volume_lookback: 20
+      top_n: 12                 # nightly basket size
 
 risk:
+  # Starting point for overnight_effect (set 2026-08-23, UNVALIDATED — see
+  # the strategies: block comment above). Many small positions instead of a
+  # few large ones is deliberate: for a strategy with zero intraday
+  # monitoring, diversification across names IS the earnings/news gap-risk
+  # control, not a stop.
   risk_per_trade_pct: 1.0       # % of equity risked between entry and stop
-  max_position_notional_pct: 30 # single position <= 30% of equity
+  max_position_notional_pct: 12 # single position <= 12% of equity
   max_gross_exposure_pct: 100   # cash account: never exceed settled cash
-  max_concurrent_positions: 3
-  max_per_bucket: 2             # allocation round 2026-07-06: bucket cap 2 +
-                                # 30% position cap lifted Sharpe 0.99 -> 1.14 IS
-                                # (held OOS at 1.08); cost is deeper drawdowns
-                                # (12% vs 8%) and occasional breaker pauses
+  max_concurrent_positions: 12  # nightly basket size ceiling (see strategy top_n)
+  max_per_bucket: 3             # cap concentration within one sector bucket
   max_per_bucket_overrides: {}  # per-bucket cap tightening (e.g. bucket: 1);
-                                # unused in the validated config, kept for
+                                # unused in the current config, kept for
                                 # future universe changes
   daily_loss_halt_pct: 2.5      # realized+unrealized day loss => halt new entries
   weekly_loss_halt_pct: 5.0
@@ -77,7 +85,12 @@ execution:
   order_type_exit: market       # exits must fill; slippage is the cost of certainty
   order_timeout_sec: 60         # unfilled entry limit => cancel, do not chase
   schedule:
-    signal_time: "15:50"        # ET; compute signals near close on daily bars
+    signal_time: "15:55"        # ET; overnight_effect: compute off an intraday
+                                # snapshot and submit entries immediately
+                                # (regular-hours notional market order, not
+                                # queued) — see service/engine.py
+    exit_time: "09:35"          # ET; force-sell every overnight position,
+                                # unconditionally, at the open
     reconcile_time: "09:00"     # ET; plus always on startup
 
 backtest:

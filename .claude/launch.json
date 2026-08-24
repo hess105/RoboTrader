@@ -7,6 +7,13 @@
       "runtimeArgs": ["-m", "service.engine", "--config", "config/paper.yaml"],
       "port": 8765,
       "autoPort": false
+    },
+    {
+      "name": "gui-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "gui/web", "run", "dev"],
+      "port": 5173,
+      "autoPort": false
     }
   ]
 }

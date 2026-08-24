@@ -11,7 +11,11 @@ bars exactly like backtest/engine.py's day loop, but through the SAME
 production strategy/risk/order-manager code a live day would run — SimBroker
 tracks its own cash/position book (seeded once from the real paper account)
 instead of re-reading the real broker each day, so positions/equity/halt
-state genuinely carry forward across the simulated range.
+state genuinely carry forward across the simulated range. For
+overnight_only strategies (strategies/overnight_effect.py), entries fill at
+the same day's close and force-exits fire at the next day's open, exactly
+like the live 15:55/09:35 jobs — see engine._evaluate_and_queue and
+engine._submit_overnight_exits.
 """
 from __future__ import annotations
 
@@ -265,28 +269,40 @@ def run_simulated_day(
         engine._sync_fills()
         engine.refresh_portfolio()
 
-        # 2. new signals as-of today's close, queued for tomorrow's open.
+        # 2. new signals as-of today's close: overnight-only entries submit
+        #    and fill IMMEDIATELY at today's close (mirrors backtest/engine.
+        #    py's close-fill rule); anything else queues for tomorrow's open.
         progress(f"{day.date()}: computing signals…")
+        if engine.overnight_strategies:
+            for sym, df in frames.items():
+                if day in df.index:
+                    sim_broker.set_fill_price(sym, float(df.loc[day, "close"]))
         view = HistoryView(frames, day, engine.strategy.warmup_bars())
         engine._evaluate_and_queue(view, day)
+        if engine.overnight_strategies:
+            engine._sync_fills()
+            engine.refresh_portfolio()
 
         # 3. snapshot equity at today's close, before tomorrow's fills land.
         equity, _cash, _bp = sim_broker.account_equity()
         equity_curve.append((str(day.date()), float(equity)))
         engine.risk.on_mark(day, float(equity))
 
-        # 4. fill today's queued entries at the next trading day's open.
+        # 4. fill today's queued entries at the next trading day's open, and
+        #    force-sell any overnight position opened at today's close.
         next_day = sim_days[i + 1] if i + 1 < len(sim_days) else None
         if next_day is not None:
             progress(f"{day.date()}: submitting queued intents for {next_day.date()} open…")
             for sym, df in frames.items():
                 if next_day in df.index:
                     sim_broker.set_fill_price(sym, float(df.loc[next_day, "open"]))
+            engine._submit_overnight_exits()
             engine._submit_pending_orders()
             engine._sync_fills()
         else:
             progress(f"{day.date()}: last day in range — any queued intents are left "
-                     f"unfilled (no next trading day in the fetched data)")
+                     f"unfilled, and any overnight position opened today stays open "
+                     f"(no next trading day in the fetched data)")
         engine.refresh_portfolio()
 
     sim_alerts.sim_day = str(sim_days[-1].date())
