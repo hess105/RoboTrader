@@ -16,7 +16,7 @@ universe:
   buckets:
     technology: [AAPL, MSFT, NVDA, AVGO, ASML, ADBE, CSCO, AMD, QCOM, INTU,
                  AMAT, TXN, ADI, LRCX, PANW, MU, KLAC, SNPS, CDNS, MRVL,
-                 NXPI, WDAY, FTNT, CDW, ZS, ON, ANSS, TTD, TEAM, GFS,
+                 NXPI, WDAY, FTNT, CDW, ZS, "ON", ANSS, TTD, TEAM, GFS,
                  SMCI, CRM, IBM, DDOG, CTSH]
     communication_services: [GOOGL, META, NFLX, TMUS, CMCSA, CHTR, WBD,
                               SIRI, DIS, VZ, EA]

@@ -70,13 +70,23 @@ class BacktestJobRunner:
                 except queue.Empty:
                     pass
             proc.join()
-            if not result_q.empty():
-                kind, payload = result_q.get()
+            try:
+                # A short timeout, not result_q.empty(): put() in the child
+                # hands off to a background feeder thread that flushes
+                # asynchronously, so a fast failure (dies before any real
+                # work — e.g. a bad request built before the first fetch)
+                # can have the child process fully exit before that thread
+                # finishes writing to the pipe. Checking empty() right after
+                # join() can then wrongly see "nothing there" and report
+                # this as a silent "stopped" instead of the real error.
+                kind, payload = result_q.get(timeout=5.0)
                 if kind == "done":
                     self._state = {"status": "done", **payload}
                 else:
                     self._state = {"status": "error", "error": payload}
-            else:
+            except queue.Empty:
+                # Genuinely nothing to report — e.g. stop() called
+                # terminate() before the child ever reached a put().
                 self._state = {"status": "stopped"}
             self._process = None
 
